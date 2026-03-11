@@ -21,6 +21,11 @@ Copy `configs/hw-session.example.json` to `configs/hw-session.json` and fill in 
 
 Leave `sync.hardware_sync_mode` as `disabled` for the current software-sync phase unless you are explicitly running a later hardware-trigger experiment.
 
+For staged RealSense validation, use these templates first:
+
+- `configs/realsense-2cam-session.example.json`
+- `configs/realsense-4cam-session.example.json`
+
 ## 4. Build the hardware image
 
 ```bash
@@ -56,9 +61,30 @@ docker compose -f docker/compose.yaml --profile hw run --rm sensor-hw --config c
 
 The container runs privileged and mounts `/dev/bus/usb` plus `/run/udev` so both SDKs can enumerate devices.
 
+Recommended staged RealSense flow:
+
+```bash
+cp configs/realsense-2cam-session.example.json configs/realsense-2cam-session.json
+```
+
+```bash
+docker compose -f docker/compose.yaml --profile hw run --rm sensor-hw --config configs/realsense-2cam-session.json
+```
+
+```bash
+cp configs/realsense-4cam-session.example.json configs/realsense-4cam-session.json
+```
+
+```bash
+docker compose -f docker/compose.yaml --profile hw run --rm sensor-hw --config configs/realsense-4cam-session.json
+```
+
 ## 6. What to watch
 
 - Frame drops: increase `queue_size` or lower camera FPS if drops spike.
 - Latency: `avg_latency_ms` and `max_latency_ms` should stay stable across all cameras.
 - Sync health: watch `sync.aligned_sets`, `sync.incomplete_sets`, `sync.dropped_frames`, and `sync.max_skew_ms`.
+- Per-camera sync: inspect `sync.per_camera.<camera_id>.avg_offset_ms`, `drift_ms`, `drift_ppm`, and `max_abs_offset_ms`.
+- Warnings: inspect `sync.warnings` for repeated sync-window drops, host-clock fallback, or severe estimated drift.
 - Isolation: unplug one camera and confirm the remaining streams keep processing.
+- Topology: before moving from `2` to `4` cameras, re-check `lsusb -t` and confirm the devices are still distributed across USB 3 controllers where possible.

@@ -1,0 +1,52 @@
+{
+  "duration_s": 30.0,
+  "queue_size": 160,
+  "processing_delay_ms": 0.0,
+  "report_path": "artifacts/realsense-4cam-report.json",
+  "sync": {
+    "enabled": true,
+    "strategy": "device-clock-soft-sync",
+    "tolerance_ms": 12.0,
+    "max_buffered_frames": 8,
+    "reference_camera_id": "rs-00",
+    "hardware_sync_mode": "disabled"
+  },
+  "cameras": [
+    {
+      "id": "rs-00",
+      "kind": "realsense",
+      "model": "realsense-d435i",
+      "serial": "REPLACE_WITH_SERIAL",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-01",
+      "kind": "realsense",
+      "model": "realsense-d455",
+      "serial": "REPLACE_WITH_SERIAL",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-02",
+      "kind": "realsense",
+      "model": "realsense-d435i",
+      "serial": "REPLACE_WITH_SERIAL",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-03",
+      "kind": "realsense",
+      "model": "realsense-d455",
+      "serial": "REPLACE_WITH_SERIAL",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    }
+  ]
+}

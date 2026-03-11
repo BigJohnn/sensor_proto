@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sensor Sync Debugger"
+  short_description: "Diagnose sensor pipeline bugs and sync issues"
+  default_prompt: "Use $sensor-sync to investigate this sensor pipeline bug and suggest an OOP-consistent fix."

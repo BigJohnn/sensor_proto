@@ -57,6 +57,8 @@ class SyncMetrics:
     total_skew_ms: float = 0.0
     max_skew_ms: float = 0.0
     per_camera_dropped: dict[str, int] = field(default_factory=dict)
+    per_camera: dict[str, CameraSyncMetrics] = field(default_factory=dict)
+    warnings: list[SyncWarning] = field(default_factory=list)
 
     def record_aligned(self, skew_ms: float) -> None:
         self.aligned_sets += 1
@@ -67,11 +69,73 @@ class SyncMetrics:
         self.incomplete_sets += 1
         self.dropped_frames += 1
         self.per_camera_dropped[camera_id] = self.per_camera_dropped.get(camera_id, 0) + 1
+        if camera_id in self.per_camera:
+            self.per_camera[camera_id].record_dropped()
+
+    def record_warning(self, camera_id: str, code: str, message: str) -> None:
+        self.warnings.append(SyncWarning(camera_id=camera_id, code=code, message=message))
 
     def as_dict(self) -> dict[str, object]:
         data = asdict(self)
         data["avg_skew_ms"] = round(self.total_skew_ms / self.aligned_sets, 3) if self.aligned_sets else 0.0
         return data
+
+
+@dataclass(slots=True)
+class CameraSyncMetrics:
+    observed_frames: int = 0
+    aligned_frames: int = 0
+    dropped_frames: int = 0
+    uses_host_clock_fallback: bool = False
+    total_offset_ms: float = 0.0
+    max_abs_offset_ms: float = 0.0
+    first_offset_ms: float | None = None
+    last_offset_ms: float | None = None
+    first_reference_timestamp_s: float | None = None
+    last_reference_timestamp_s: float | None = None
+
+    def record_observed(self, uses_host_clock_fallback: bool) -> None:
+        self.observed_frames += 1
+        self.uses_host_clock_fallback = self.uses_host_clock_fallback or uses_host_clock_fallback
+
+    def record_dropped(self) -> None:
+        self.dropped_frames += 1
+
+    def record_alignment(self, offset_ms: float, reference_timestamp_s: float) -> None:
+        self.aligned_frames += 1
+        self.total_offset_ms += offset_ms
+        self.max_abs_offset_ms = max(self.max_abs_offset_ms, abs(offset_ms))
+        if self.first_offset_ms is None:
+            self.first_offset_ms = offset_ms
+            self.first_reference_timestamp_s = reference_timestamp_s
+        self.last_offset_ms = offset_ms
+        self.last_reference_timestamp_s = reference_timestamp_s
+
+    def as_dict(self) -> dict[str, object]:
+        data = asdict(self)
+        data["avg_offset_ms"] = round(self.total_offset_ms / self.aligned_frames, 3) if self.aligned_frames else 0.0
+        drift_ms = 0.0
+        drift_ppm = 0.0
+        if (
+            self.first_offset_ms is not None
+            and self.last_offset_ms is not None
+            and self.first_reference_timestamp_s is not None
+            and self.last_reference_timestamp_s is not None
+        ):
+            drift_ms = self.last_offset_ms - self.first_offset_ms
+            elapsed_ms = (self.last_reference_timestamp_s - self.first_reference_timestamp_s) * 1000.0
+            if elapsed_ms > 0.0:
+                drift_ppm = (drift_ms / elapsed_ms) * 1_000_000.0
+        data["drift_ms"] = round(drift_ms, 3)
+        data["drift_ppm"] = round(drift_ppm, 3)
+        return data
+
+
+@dataclass(slots=True)
+class SyncWarning:
+    camera_id: str
+    code: str
+    message: str
 
 
 @dataclass(slots=True)

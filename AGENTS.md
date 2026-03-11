@@ -1,27 +1,42 @@
 # Repository Guidelines
 
+## Preferred Skill
+
+For debugging, strange runtime behavior, sync drift, frame drops, hardware-vs-mock mismatches, Docker/runtime issues, or architecture-preserving fixes in this repository, prefer using `$sensor-sync`.
+
+The skill lives at [agent_skills/sensor-sync/SKILL.md](/home/hanyu/Codes/sensor_proto/agent_skills/sensor-sync/SKILL.md) and is the project-specific guide for:
+
+- understanding the current sensor evaluation architecture
+- localizing issues by layer
+- preserving the adapter/factory/pipeline OOP boundaries
+- validating fixes with the project's standard commands
+
 ## Project Structure & Module Organization
 
-This repository is currently a minimal scaffold. The only committed directory is [`docker/`](/home/hanyu/Codes/sensor_proto/docker), which should hold container definitions and related setup assets. Keep repository-level guidance files such as [`AGENTS.md`](/home/hanyu/Codes/sensor_proto/AGENTS.md) at the root.
+This repository is a sensor performance evaluation system with mock and real-hardware capture paths. Keep repository-level guidance files such as [`AGENTS.md`](/home/hanyu/Codes/sensor_proto/AGENTS.md) at the root.
 
-When application code is added, keep it organized by responsibility and avoid mixing runtime code with container assets. A practical default is:
+Keep code organized by responsibility and avoid mixing runtime code with container assets:
 
-- `src/` for implementation
+- `src/sensor_proto/` for runtime code
+- `src/sensor_proto/cameras/` for camera adapters and adapter factory wiring
 - `tests/` for automated tests
-- `docker/` for container build and runtime files
-- `docs/` for design notes or operational runbooks
+- `configs/` for mock and hardware session configs
+- `docker/` for image build and runtime definitions
+- `docs/` for runbooks and architecture notes
+- `agent_skills/` for project-local Codex skills
 
 ## Build, Test, and Development Commands
 
-No build, lint, or test commands are committed yet. If you introduce a toolchain, expose the main entry points through documented commands and keep them stable.
+Use these commands as the stable developer entry points:
 
-Examples to add once supported:
+- `PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_pipeline.py` to run the automated pipeline tests
+- `PYTHONPATH=src python3 -m sensor_proto.main --config configs/mock-session.json` to run the mock capture flow
+- `docker compose -f docker/compose.yaml config` to validate compose config
+- `docker compose -f docker/compose.yaml --profile hw config` to validate the hardware profile
+- `DOCKER_BUILDKIT=1 docker compose -f docker/compose.yaml --profile hw build sensor-hw` to build the hardware image
+- `docker compose -f docker/compose.yaml run --rm sensor-mock` to run the mock container flow
 
-- `docker build -f docker/Dockerfile .` to build the local image
-- `make test` or `pytest` to run the test suite
-- `make lint` or `ruff check .` to run static checks
-
-Update this guide in the same change that adds new developer commands.
+Update this guide in the same change that adds or changes developer commands.
 
 ## Coding Style & Naming Conventions
 
@@ -31,7 +46,9 @@ Do not commit generated artifacts, local secrets, or large binaries. Keep Docker
 
 ## Testing Guidelines
 
-There is no test framework configured yet. Add automated tests alongside new functionality instead of deferring coverage. Mirror the source layout under `tests/` and use names that make intent obvious, such as `test_sensor_parser.py` or `sensor_parser.test.ts`.
+Add automated tests alongside new functionality instead of deferring coverage. Prefer extending [tests/test_pipeline.py](/home/hanyu/Codes/sensor_proto/tests/test_pipeline.py) for pipeline, backpressure, isolation, and synchronization behavior. Mirror the source layout under `tests/` when adding new modules.
+
+For hardware-sensitive fixes, start with mock coverage, then run the smallest representative hardware validation.
 
 ## Commit & Pull Request Guidelines
 

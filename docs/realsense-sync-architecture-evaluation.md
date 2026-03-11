@@ -23,7 +23,7 @@ The repository now has a first-pass sync architecture:
 - `Frame` keeps host/device timing metadata instead of only `time.monotonic()`
 - `mock`, `realsense`, and `orbbec` adapters all emit richer timing data
 - `FrameSynchronizer` performs device-clock normalization plus approximate multi-camera alignment
-- `RunReport` now includes a `sync` section with aligned set count, dropped sync frames, skew, and pending buffers
+- `RunReport` now includes a `sync` section with aligned set count, dropped sync frames, skew, pending buffers, per-camera offset/drift estimates, and sync-health warnings
 - config files now expose a `sync` block and `mock_*` timing knobs
 
 ## Why This Path
@@ -206,26 +206,37 @@ Official references checked on 2026-03-11:
 
 ## Full Plan
 
-### Phase 1: Done now
+### Phase 1: Done
 
-- expand frame timing metadata
-- add software synchronization in the pipeline
-- add mock timing knobs for offset, drift, and future sync grouping
-- expose sync results in the report
-- document the architecture with diagrams
+- [done] expand frame timing metadata
+- [done] add software synchronization in the pipeline
+- [done] add mock timing knobs for offset, drift, and future sync grouping
+- [done] expose sync results in the report
+- [done] document the architecture with diagrams
 
-### Phase 2: Next implementation step
+### Phase 2: Done
 
-- add per-camera offset and drift estimates to the report
-- emit sync-health warnings when a camera repeatedly falls out of the window
-- add a mock profile dedicated to `8`-camera skew and drift stress testing
+- [done] add per-camera offset and drift estimates to the report
+- [done] emit sync-health warnings when a camera repeatedly falls out of the window
+- [done] add a mock profile dedicated to `8`-camera skew and drift stress testing
 
-### Phase 3: Real hardware validation
+Implemented assets:
 
-- run `2`-camera and `4`-camera RealSense sessions first
-- measure skew distribution and incomplete-set ratio
-- verify USB topology before any GPIO sync wiring
-- only then scale toward `8` cameras
+- `configs/mock-8cam-sync-stress.json`
+- `sync.per_camera.*` report fields
+- `sync.warnings`
+
+### Phase 3: In Progress
+
+- [done] add `2`-camera RealSense session template
+- [done] add `4`-camera RealSense session template
+- [done] define the report metrics to inspect during real hardware validation
+- [done] define the USB topology check before any GPIO sync wiring
+- [pending] execute a `2`-camera RealSense bench run
+- [pending] execute a `4`-camera RealSense bench run
+- [pending] scale toward `8` cameras after the smaller runs are stable
+
+Phase 3 is intentionally not marked fully done here because the repository now contains the configs and reporting support needed for those runs, but the actual multi-camera bench execution still depends on having `2` and then `4` physical RealSense devices connected.
 
 ### Phase 4: Optional hardware sync
 
@@ -245,3 +256,16 @@ Official references checked on 2026-03-11:
 - hardware sync: reserved, not required yet
 - ROS 2: optional bridge, not foundation
 - next useful milestone: make the report quantify skew, drift, and sync-health well enough that `8`-camera decisions are data-driven
+
+## Current Status Snapshot
+
+As of 2026-03-11:
+
+- `Phase 1` is done in code and documented.
+- `Phase 2` is done in code, tested, and available through the new report schema plus the `8`-camera mock stress profile.
+- `Phase 3` is prepared but not fully done:
+  - the repository now has `2`-camera and `4`-camera RealSense session templates
+  - the repository now reports the metrics needed for staged hardware validation
+  - actual `2`-camera and `4`-camera RealSense bench execution still requires the corresponding physical devices to be connected
+
+This means the software stack is ready for staged multi-camera validation, but the remaining `Phase 3` completion criteria are hardware-execution tasks rather than missing code structure.
