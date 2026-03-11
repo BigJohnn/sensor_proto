@@ -9,20 +9,27 @@ from sensor_proto.models import Frame
 
 
 class RealSenseCameraAdapter(CameraAdapter):
-    def __init__(self, config) -> None:
-        super().__init__(config)
-        try:
-            import pyrealsense2 as rs
-        except ImportError as exc:
-            raise RuntimeError("pyrealsense2 is not installed in this environment.") from exc
+    _frame_timeout_ms = 5000
+    _frame_retry_backoff_s = 0.1
+    _restart_retry_backoff_s = 0.5
+    _restart_after_failures = 3
 
-        self._rs = rs
-        self._pipeline = rs.pipeline()
+    def __init__(self, config, rs_module=None) -> None:
+        super().__init__(config)
+        if rs_module is None:
+            try:
+                import pyrealsense2 as rs_module
+            except ImportError as exc:
+                raise RuntimeError("pyrealsense2 is not installed in this environment.") from exc
+
+        self._rs = rs_module
+        self._pipeline = self._create_pipeline()
         self._started = False
 
-    def _start(self) -> None:
-        if self._started:
-            return
+    def _create_pipeline(self):
+        return self._rs.pipeline()
+
+    def _build_rs_config(self):
         config = self._rs.config()
         if self.config.serial:
             config.enable_device(self.config.serial)
@@ -33,11 +40,30 @@ class RealSenseCameraAdapter(CameraAdapter):
             self._rs.format.bgr8,
             self.config.fps,
         )
-        self._pipeline.start(config)
+        return config
+
+    def _start(self) -> None:
+        if self._started:
+            return
+        self._pipeline.start(self._build_rs_config())
         self._started = True
 
+    def _stop_pipeline(self) -> None:
+        if not self._started:
+            return
+        try:
+            self._pipeline.stop()
+        except RuntimeError:
+            pass
+        self._started = False
+
+    def _restart_pipeline(self) -> None:
+        self._stop_pipeline()
+        self._pipeline = self._create_pipeline()
+        self._start()
+
     def _next_frame(self) -> dict[str, object]:
-        frames = self._pipeline.wait_for_frames(5000)
+        frames = self._pipeline.wait_for_frames(self._frame_timeout_ms)
         color = frames.get_color_frame()
         if not color:
             raise RuntimeError(f"{self.config.id} did not return a color frame.")
@@ -58,12 +84,50 @@ class RealSenseCameraAdapter(CameraAdapter):
             "image_data": bytes(color.get_data()) if self.config.capture_image_data else None,
         }
 
-    async def frames(self) -> AsyncIterator[Frame]:
+    def _is_recoverable_frame_error(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        return (
+            "didn't arrive within" in message
+            or "frame didn't arrive" in message
+            or "timeout" in message
+            or "did not return a color frame" in message
+        )
+
+    async def _next_frame_with_recovery(self, consecutive_failures: int) -> tuple[dict[str, object] | None, int]:
         self._start()
+        try:
+            frame_data = await asyncio.to_thread(self._next_frame)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if not self._is_recoverable_frame_error(exc):
+                raise
+            consecutive_failures += 1
+            if consecutive_failures >= self._restart_after_failures:
+                print(
+                    f"{self.config.id}: frame retrieval stalled after {consecutive_failures} recoverable errors; restarting pipeline.",
+                    flush=True,
+                )
+                try:
+                    await asyncio.to_thread(self._restart_pipeline)
+                except Exception as restart_exc:
+                    print(f"{self.config.id}: pipeline restart failed: {restart_exc}", flush=True)
+                    await asyncio.sleep(self._restart_retry_backoff_s)
+                    return None, consecutive_failures
+                await asyncio.sleep(self._restart_retry_backoff_s)
+                return None, 0
+            await asyncio.sleep(self._frame_retry_backoff_s)
+            return None, consecutive_failures
+        return frame_data, 0
+
+    async def frames(self) -> AsyncIterator[Frame]:
         sequence = 0
+        consecutive_failures = 0
         try:
             while True:
-                frame_data = await asyncio.to_thread(self._next_frame)
+                frame_data, consecutive_failures = await self._next_frame_with_recovery(consecutive_failures)
+                if frame_data is None:
+                    continue
                 host_received_at = time.monotonic()
                 yield Frame(
                     camera_id=self.config.id,
@@ -98,6 +162,4 @@ class RealSenseCameraAdapter(CameraAdapter):
             await self.close()
 
     async def close(self) -> None:
-        if self._started:
-            await asyncio.to_thread(self._pipeline.stop)
-            self._started = False
+        await asyncio.to_thread(self._stop_pipeline)

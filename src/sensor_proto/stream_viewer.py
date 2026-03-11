@@ -25,6 +25,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-width", type=int, default=1600, help="Maximum viewer window width in pixels.")
     parser.add_argument("--max-height", type=int, default=900, help="Maximum viewer window height in pixels.")
     parser.add_argument("--poll-interval-ms", type=int, default=60, help="Delay between fetch attempts in milliseconds.")
+    parser.add_argument(
+        "--stale-after-ms",
+        type=int,
+        default=1500,
+        help="Warn when the latest aligned set does not change for this long.",
+    )
     parser.add_argument("--window-name", default="SensorProto Multi-Camera Viewer", help="OpenCV window title.")
     return parser.parse_args()
 
@@ -110,6 +116,32 @@ def render_aligned_grid(
     return canvas, layout
 
 
+def compute_stalled_duration_s(
+    last_set_change_at: float | None,
+    now_monotonic: float,
+    stale_after_ms: int,
+) -> float | None:
+    if last_set_change_at is None:
+        return None
+    stale_after_s = max(0.0, stale_after_ms / 1000.0)
+    stalled_for_s = max(0.0, now_monotonic - last_set_change_at)
+    if stalled_for_s < stale_after_s:
+        return None
+    return stalled_for_s
+
+
+def build_stalled_message(last_set_id: int | None, stalled_for_s: float) -> str:
+    if last_set_id is None:
+        return f"stream stalled for {stalled_for_s:.1f}s"
+    return f"stream stalled for {stalled_for_s:.1f}s on set={last_set_id}"
+
+
+def draw_status_banner(canvas, message: str, color: tuple[int, int, int] = (45, 45, 160)) -> None:
+    cv2 = _load_cv2_module()
+    cv2.rectangle(canvas, (0, 0), (canvas.shape[1], 38), color, -1)
+    cv2.putText(canvas, message, (16, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (245, 247, 250), 2, cv2.LINE_AA)
+
+
 def _load_cv2_module():
     try:
         import cv2
@@ -136,22 +168,36 @@ def main() -> None:
 
     last_set_id: int | None = None
     last_canvas = None
+    last_set_change_at: float | None = None
     while True:
+        overlay_message: str | None = None
+        overlay_color = (45, 45, 160)
         try:
             aligned = client.get_latest_aligned_set()
             if aligned.set_id != last_set_id:
                 last_canvas, layout = render_aligned_grid(aligned, args.max_width, args.max_height)
                 cv2.resizeWindow(args.window_name, layout.canvas_width, layout.canvas_height)
                 last_set_id = aligned.set_id
+                last_set_change_at = time.monotonic()
+            stalled_for_s = compute_stalled_duration_s(last_set_change_at, time.monotonic(), args.stale_after_ms)
+            if stalled_for_s is not None:
+                overlay_message = build_stalled_message(last_set_id, stalled_for_s)
+                overlay_color = (31, 95, 176)
         except StreamClientError as exc:
-            last_canvas = _render_error_canvas(str(exc), args.max_width, args.max_height)
+            if last_canvas is None:
+                last_canvas = _render_error_canvas(str(exc), args.max_width, args.max_height)
+                last_set_change_at = None
+            else:
+                overlay_message = str(exc)
 
         if last_canvas is not None:
-            cv2.imshow(args.window_name, last_canvas)
+            display_canvas = last_canvas.copy()
+            if overlay_message:
+                draw_status_banner(display_canvas, overlay_message, color=overlay_color)
+            cv2.imshow(args.window_name, display_canvas)
         key = cv2.waitKey(max(1, args.poll_interval_ms)) & 0xFF
         if key in (27, ord("q")):
             break
-        time.sleep(max(0.0, args.poll_interval_ms / 1000.0))
 
     cv2.destroyAllWindows()
 
