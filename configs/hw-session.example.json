@@ -1,0 +1,42 @@
+{
+  "duration_s": 30.0,
+  "queue_size": 64,
+  "processing_delay_ms": 0.0,
+  "report_path": "artifacts/hw-report.json",
+  "sync": {
+    "enabled": true,
+    "strategy": "device-clock-soft-sync",
+    "tolerance_ms": 12.0,
+    "max_buffered_frames": 6,
+    "hardware_sync_mode": "disabled"
+  },
+  "cameras": [
+    {
+      "id": "rs-435i",
+      "kind": "realsense",
+      "model": "realsense-d435i",
+      "serial": "REPLACE_WITH_SERIAL",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-455",
+      "kind": "realsense",
+      "model": "realsense-d455",
+      "serial": "REPLACE_WITH_SERIAL",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "bolt",
+      "kind": "orbbec",
+      "model": "orbbec-bolt",
+      "serial": "REPLACE_WITH_SERIAL",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    }
+  ]
+}

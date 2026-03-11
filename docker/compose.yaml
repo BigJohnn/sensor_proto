@@ -1,0 +1,38 @@
+name: sensor-proto
+
+services:
+  sensor-mock:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        INSTALL_REALSENSE: "0"
+        INSTALL_ORBBEC: "0"
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command: ["--config", "configs/mock-session.json"]
+
+  sensor-hw:
+    profiles: ["hw"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      ssh:
+        - default
+      args:
+        INSTALL_REALSENSE: ${SENSOR_HW_INSTALL_REALSENSE:-1}
+        INSTALL_ORBBEC: ${SENSOR_HW_INSTALL_ORBBEC:-1}
+        PYORBBECSDK_REPO: ${SENSOR_HW_PYORBBECSDK_REPO:-git@github.com:orbbec/pyorbbecsdk.git}
+    working_dir: /workspace
+    privileged: true
+    network_mode: host
+    volumes:
+      - ..:/workspace
+      - /dev/bus/usb:/dev/bus/usb
+      - /run/udev:/run/udev:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command: ["--config", "configs/hw-session.example.json"]
