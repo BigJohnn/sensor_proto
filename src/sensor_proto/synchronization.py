@@ -4,7 +4,7 @@ from collections import deque
 from dataclasses import dataclass
 
 from sensor_proto.config import RunConfig
-from sensor_proto.models import CameraSyncMetrics, Frame, SyncMetrics
+from sensor_proto.models import AlignedFrameSet, CameraSyncMetrics, Frame, SyncMetrics
 
 
 @dataclass(slots=True)
@@ -28,6 +28,7 @@ class FrameSynchronizer:
         self._max_buffered_frames = max(config.sync.max_buffered_frames, 1)
         self._clock_trackers: dict[str, _ClockTracker] = {}
         self._pending: dict[str, deque[Frame]] = {camera_id: deque() for camera_id in self._camera_ids}
+        self._next_set_id = 0
         self.metrics = SyncMetrics(
             enabled=config.sync.enabled and len(self._camera_ids) > 1,
             strategy=config.sync.strategy,
@@ -37,14 +38,14 @@ class FrameSynchronizer:
             per_camera={camera_id: CameraSyncMetrics() for camera_id in self._camera_ids},
         )
 
-    def observe(self, frame: Frame) -> None:
+    def observe(self, frame: Frame) -> list[AlignedFrameSet]:
         if not self.metrics.enabled:
-            return
+            return []
         self.metrics.per_camera[frame.camera_id].record_observed(frame.device_timestamp_ms is None)
         normalized = self._normalize(frame)
         self._pending[frame.camera_id].append(normalized)
         self._trim_buffers()
-        self._match_frames()
+        return self._match_frames()
 
     def finalize(self) -> SyncMetrics:
         if self.metrics.enabled:
@@ -56,6 +57,9 @@ class FrameSynchronizer:
         host_received_at = frame.host_received_at or frame.created_at
         if frame.device_timestamp_ms is None:
             frame.normalized_timestamp_s = host_received_at
+            return frame
+        if self._uses_shared_global_time_domain(frame):
+            frame.normalized_timestamp_s = frame.device_timestamp_ms / 1000.0
             return frame
         tracker = self._clock_trackers.get(frame.camera_id)
         if tracker is None:
@@ -75,7 +79,8 @@ class FrameSynchronizer:
                 buffer.popleft()
                 self.metrics.record_incomplete(camera_id)
 
-    def _match_frames(self) -> None:
+    def _match_frames(self) -> list[AlignedFrameSet]:
+        aligned_sets: list[AlignedFrameSet] = []
         while all(self._pending[camera_id] for camera_id in self._camera_ids):
             head_frames = {camera_id: self._pending[camera_id][0] for camera_id in self._camera_ids}
             timestamps = {
@@ -89,19 +94,39 @@ class FrameSynchronizer:
             skew_s = latest_timestamp_s - earliest_timestamp_s
 
             if skew_s <= self._tolerance_s:
+                matched_frames: dict[str, Frame] = {}
+                offsets_ms: dict[str, float] = {}
                 for camera_id in self._camera_ids:
                     offset_ms = (timestamps[camera_id] - reference_timestamp_s) * 1000.0
                     self.metrics.per_camera[camera_id].record_alignment(offset_ms, reference_timestamp_s)
-                    self._pending[camera_id].popleft()
+                    offsets_ms[camera_id] = offset_ms
+                    matched_frames[camera_id] = self._pending[camera_id].popleft()
                 self.metrics.record_aligned(skew_s * 1000.0)
+                aligned_sets.append(
+                    AlignedFrameSet(
+                        set_id=self._next_set_id,
+                        reference_camera_id=self._reference_camera_id,
+                        reference_timestamp_s=reference_timestamp_s,
+                        skew_ms=skew_s * 1000.0,
+                        frames=matched_frames,
+                        offsets_ms=offsets_ms,
+                    )
+                )
+                self._next_set_id += 1
                 continue
 
             self._pending[earliest_camera_id].popleft()
             self.metrics.record_incomplete(earliest_camera_id)
+        return aligned_sets
 
     @staticmethod
     def _frame_timestamp_s(frame: Frame) -> float:
         return frame.normalized_timestamp_s or frame.host_received_at or frame.created_at
+
+    @staticmethod
+    def _uses_shared_global_time_domain(frame: Frame) -> bool:
+        domain = (frame.timestamp_domain or "").lower()
+        return domain.endswith("global_time")
 
     def _emit_warnings(self) -> None:
         for camera_id, camera_metrics in self.metrics.per_camera.items():

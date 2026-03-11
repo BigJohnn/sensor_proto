@@ -29,12 +29,18 @@ Keep code organized by responsibility and avoid mixing runtime code with contain
 
 Use these commands as the stable developer entry points:
 
-- `PYTHONPATH=src PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/test_pipeline.py` to run the automated pipeline tests
-- `PYTHONPATH=src python3 -m sensor_proto.main --config configs/mock-session.json` to run the mock capture flow
+- `make test` to run the automated test suite, including stream service, host client, CLI, and viewer layout coverage
+- `make mock-run` to run the mock capture flow
+- `make stream-up` to start the hardware stream service with automatic camera detection and runtime config generation
+- `make stream-viewer` to open the host-side OpenCV multi-camera viewer
+- `make stream-shot` to fetch the latest aligned frame set and save per-camera PNGs
+- `make stream-down` to stop the hardware stream service
+- `make stream-logs` to follow the hardware stream service logs
 - `docker compose -f docker/compose.yaml config` to validate compose config
 - `docker compose -f docker/compose.yaml --profile hw config` to validate the hardware profile
 - `DOCKER_BUILDKIT=1 docker compose -f docker/compose.yaml --profile hw build sensor-hw` to build the hardware image
 - `docker compose -f docker/compose.yaml run --rm sensor-mock` to run the mock container flow
+- `docker compose -f docker/compose.yaml --profile hw up sensor-stream` to auto-detect connected RealSense devices, generate the runtime stream config, and run the synchronized hardware stream service plus host dashboard on `http://127.0.0.1:8787`
 
 Update this guide in the same change that adds or changes developer commands.
 

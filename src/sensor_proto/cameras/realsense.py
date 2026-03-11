@@ -55,6 +55,7 @@ class RealSenseCameraAdapter(CameraAdapter):
             "device_timestamp_ms": device_timestamp_ms,
             "frame_counter": frame_counter,
             "timestamp_domain": timestamp_domain,
+            "image_data": bytes(color.get_data()) if self.config.capture_image_data else None,
         }
 
     async def frames(self) -> AsyncIterator[Frame]:
@@ -87,6 +88,10 @@ class RealSenseCameraAdapter(CameraAdapter):
                         else None
                     ),
                     sensor_serial=self.config.serial,
+                    width=self.config.width,
+                    height=self.config.height,
+                    pixel_format="bgr8" if self.config.capture_image_data else None,
+                    image_data=frame_data["image_data"] if frame_data["image_data"] is not None else None,
                 )
                 sequence += 1
         finally:

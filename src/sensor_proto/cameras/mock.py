@@ -10,6 +10,15 @@ from sensor_proto.models import Frame
 
 
 class MockCameraAdapter(CameraAdapter):
+    def _build_image_data(self, sequence: int) -> bytes | None:
+        if not self.config.capture_image_data:
+            return None
+        pixel_count = self.config.width * self.config.height
+        blue = sequence % 256
+        green = (self.config.seed * 17) % 256
+        red = (sequence * 3 + self.config.seed) % 256
+        return bytes((blue, green, red)) * pixel_count
+
     async def frames(self) -> AsyncIterator[Frame]:
         interval_s = 1.0 / max(self.config.fps, 1)
         jitter_s = max(self.config.mock_jitter_ms, 0.0) / 1000.0
@@ -40,5 +49,9 @@ class MockCameraAdapter(CameraAdapter):
                 frame_counter=sequence,
                 sensor_serial=self.config.serial or f"mock-{self.config.id}",
                 hardware_sync_group=self.config.mock_sync_group,
+                width=self.config.width,
+                height=self.config.height,
+                pixel_format="bgr8" if self.config.capture_image_data else None,
+                image_data=self._build_image_data(sequence),
             )
             sequence += 1

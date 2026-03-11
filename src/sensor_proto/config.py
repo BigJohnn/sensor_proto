@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 @dataclass(slots=True)
@@ -21,6 +23,7 @@ class CameraConfig:
     mock_timestamp_offset_ms: float = 0.0
     mock_timestamp_drift_ppm: float = 0.0
     mock_sync_group: str | None = None
+    capture_image_data: bool = False
     seed: int = 0
 
 
@@ -35,6 +38,14 @@ class SyncConfig:
 
 
 @dataclass(slots=True)
+class StreamConfig:
+    host: str = "0.0.0.0"
+    port: int = 8787
+    recent_sets: int = 4
+    client_refresh_ms: int = 250
+
+
+@dataclass(slots=True)
 class RunConfig:
     cameras: list[CameraConfig]
     duration_s: float
@@ -42,14 +53,16 @@ class RunConfig:
     processing_delay_ms: float = 0.0
     report_path: str | None = None
     sync: SyncConfig = field(default_factory=SyncConfig)
+    stream: StreamConfig = field(default_factory=StreamConfig)
 
 
 def load_run_config(path: str | Path) -> RunConfig:
-    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    raw = load_run_config_payload(path)
     cameras = [CameraConfig(**camera) for camera in raw.get("cameras", [])]
     if not cameras:
         raise ValueError("Run config must define at least one camera.")
     sync_raw = raw.get("sync", {})
+    stream_raw = raw.get("stream", {})
     return RunConfig(
         cameras=cameras,
         duration_s=float(raw.get("duration_s", 10.0)),
@@ -64,6 +77,12 @@ def load_run_config(path: str | Path) -> RunConfig:
             reference_camera_id=sync_raw.get("reference_camera_id"),
             hardware_sync_mode=str(sync_raw.get("hardware_sync_mode", "disabled")),
         ),
+        stream=StreamConfig(
+            host=str(stream_raw.get("host", "0.0.0.0")),
+            port=int(stream_raw.get("port", 8787)),
+            recent_sets=int(stream_raw.get("recent_sets", 4)),
+            client_refresh_ms=int(stream_raw.get("client_refresh_ms", 250)),
+        ),
     )
 
 
@@ -71,3 +90,18 @@ def ensure_parent_dir(path: str | Path | None) -> None:
     if not path:
         return
     Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+
+def load_run_config_payload(path: str | Path) -> dict[str, Any]:
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("Run config root must be a JSON object.")
+    return raw
+
+
+def write_run_config_payload(path: str | Path, payload: Mapping[str, Any]) -> None:
+    ensure_parent_dir(path)
+    Path(path).write_text(
+        json.dumps(dict(payload), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )

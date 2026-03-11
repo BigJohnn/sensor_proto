@@ -79,6 +79,11 @@ The current synchronizer is a **software sync** strategy:
 5. If their normalized timestamps fall inside the configured tolerance window, the set is counted as aligned.
 6. If not, the earliest frame is discarded from the sync window and counted as an incomplete set.
 
+Special handling:
+
+- if a frame already arrives in a shared timestamp domain such as `timestamp_domain.global_time`, the synchronizer now uses `device_timestamp_ms` directly instead of re-anchoring each camera to a separate host-origin estimate
+- per-camera host re-anchoring is still used for private device clocks and mock device clocks where epochs differ across cameras
+
 This is appropriate for the current phase because it gives us measurable skew and loss behavior without pretending the devices are already electrically synchronized.
 
 ```mermaid

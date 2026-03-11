@@ -17,10 +17,46 @@ class Frame:
     sensor_serial: str | None = None
     hardware_sync_group: str | None = None
     normalized_timestamp_s: float | None = None
+    width: int | None = None
+    height: int | None = None
+    pixel_format: str | None = None
+    image_data: bytes | None = None
 
     def __post_init__(self) -> None:
         if self.host_received_at is None:
             self.host_received_at = self.created_at
+
+
+@dataclass(slots=True)
+class AlignedFrameSet:
+    set_id: int
+    reference_camera_id: str
+    reference_timestamp_s: float
+    skew_ms: float
+    frames: dict[str, Frame] = field(default_factory=dict)
+    offsets_ms: dict[str, float] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "set_id": self.set_id,
+            "reference_camera_id": self.reference_camera_id,
+            "reference_timestamp_s": self.reference_timestamp_s,
+            "skew_ms": round(self.skew_ms, 3),
+            "frames": {
+                camera_id: {
+                    "sequence": frame.sequence,
+                    "sensor_serial": frame.sensor_serial,
+                    "frame_counter": frame.frame_counter,
+                    "device_timestamp_ms": frame.device_timestamp_ms,
+                    "timestamp_domain": frame.timestamp_domain,
+                    "width": frame.width,
+                    "height": frame.height,
+                    "pixel_format": frame.pixel_format,
+                }
+                for camera_id, frame in self.frames.items()
+            },
+            "offsets_ms": {camera_id: round(offset_ms, 3) for camera_id, offset_ms in self.offsets_ms.items()},
+        }
 
 
 @dataclass(slots=True)

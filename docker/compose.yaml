@@ -36,3 +36,30 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
     command: ["--config", "configs/hw-session.example.json"]
+
+  sensor-stream:
+    profiles: ["hw"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        INSTALL_REALSENSE: "1"
+        INSTALL_ORBBEC: "0"
+    working_dir: /workspace
+    privileged: true
+    volumes:
+      - ..:/workspace
+      - /dev/bus/usb:/dev/bus/usb
+      - /run/udev:/run/udev:ro
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      PYTHONUNBUFFERED: "1"
+    entrypoint: ["python3", "-m", "sensor_proto.stream_main"]
+    command:
+      [
+        "--config",
+        "configs/realsense-8cam-session.json",
+        "--generated-config",
+        "artifacts/realsense-8cam-stream-runtime.json",
+      ]

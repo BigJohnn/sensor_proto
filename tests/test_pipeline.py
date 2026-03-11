@@ -3,7 +3,9 @@ from __future__ import annotations
 import unittest
 
 from sensor_proto.config import CameraConfig, RunConfig, SyncConfig
+from sensor_proto.models import Frame
 from sensor_proto.pipeline import MultiCameraRunner
+from sensor_proto.synchronization import FrameSynchronizer
 
 
 class MultiCameraRunnerTests(unittest.IsolatedAsyncioTestCase):
@@ -249,6 +251,77 @@ class MultiCameraRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(drift_metrics["avg_offset_ms"], 0.0)
         self.assertNotEqual(drift_metrics["drift_ppm"], 0.0)
         self.assertTrue(any(w.code == "clock_drift" for w in report.sync.warnings))
+
+    def test_sync_uses_global_time_domain_without_per_camera_reanchoring(self) -> None:
+        config = RunConfig(
+            duration_s=0.2,
+            queue_size=16,
+            processing_delay_ms=0.0,
+            sync=SyncConfig(
+                enabled=True,
+                strategy="device-clock-soft-sync",
+                tolerance_ms=15.0,
+                max_buffered_frames=4,
+                reference_camera_id="cam-a",
+                hardware_sync_mode="disabled",
+            ),
+            cameras=[
+                CameraConfig(
+                    id="cam-a",
+                    kind="realsense",
+                    model="realsense-d435i",
+                    fps=30,
+                    width=640,
+                    height=480,
+                ),
+                CameraConfig(
+                    id="cam-b",
+                    kind="realsense",
+                    model="realsense-d455",
+                    fps=30,
+                    width=640,
+                    height=480,
+                ),
+            ],
+        )
+
+        synchronizer = FrameSynchronizer(config)
+        result = synchronizer.observe(
+            Frame(
+                camera_id="cam-a",
+                camera_kind="realsense",
+                sequence=0,
+                created_at=10.0,
+                host_received_at=10.0,
+                payload_size=1,
+                device_timestamp_ms=1_000.0,
+                timestamp_domain="timestamp_domain.global_time",
+            )
+        )
+        self.assertEqual(result, [])
+        result = synchronizer.observe(
+            Frame(
+                camera_id="cam-b",
+                camera_kind="realsense",
+                sequence=0,
+                created_at=10.03,
+                host_received_at=10.03,
+                payload_size=1,
+                device_timestamp_ms=1_008.0,
+                timestamp_domain="timestamp_domain.global_time",
+            )
+        )
+
+        metrics = synchronizer.finalize()
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].set_id, 0)
+        self.assertEqual(set(result[0].frames), {"cam-a", "cam-b"})
+        self.assertEqual(metrics.aligned_sets, 1)
+        self.assertEqual(metrics.dropped_frames, 0)
+        self.assertAlmostEqual(metrics.max_skew_ms, 8.0, places=3)
+        self.assertEqual(metrics.per_camera["cam-a"].aligned_frames, 1)
+        self.assertEqual(metrics.per_camera["cam-b"].aligned_frames, 1)
 
 
 if __name__ == "__main__":

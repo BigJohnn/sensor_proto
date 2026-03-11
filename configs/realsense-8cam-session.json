@@ -1,0 +1,88 @@
+{
+  "duration_s": 30.0,
+  "queue_size": 320,
+  "processing_delay_ms": 0.0,
+  "report_path": "artifacts/realsense-8cam-report.json",
+  "sync": {
+    "enabled": true,
+    "strategy": "device-clock-soft-sync",
+    "tolerance_ms": 45.0,
+    "max_buffered_frames": 10,
+    "reference_camera_id": "rs-00",
+    "hardware_sync_mode": "disabled"
+  },
+  "cameras": [
+    {
+      "id": "rs-00",
+      "kind": "realsense",
+      "model": "realsense-d435i",
+      "serial": "347622071176",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-01",
+      "kind": "realsense",
+      "model": "realsense-d435if",
+      "serial": "327122078969",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-02",
+      "kind": "realsense",
+      "model": "realsense-d435i",
+      "serial": "348522075731",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-03",
+      "kind": "realsense",
+      "model": "realsense-d435",
+      "serial": "152222070161",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-04",
+      "kind": "realsense",
+      "model": "realsense-d435if",
+      "serial": "250222073548",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-05",
+      "kind": "realsense",
+      "model": "realsense-d435i",
+      "serial": "420222073242",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-06",
+      "kind": "realsense",
+      "model": "realsense-d435i",
+      "serial": "406122070707",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-07",
+      "kind": "realsense",
+      "model": "realsense-d435if",
+      "serial": "327122077093",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    }
+  ]
+}
