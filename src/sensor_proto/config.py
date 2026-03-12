@@ -58,6 +58,11 @@ class RecordingConfig:
     robot_type: str = "camera-rig"
     fps: int | None = None
     use_videos: bool = True
+    queue_maxsize: int = 32
+    overflow_policy: str = "fail_recording_keep_stream"
+    video_codec: str = "h264"
+    encoder_queue_maxsize: int = 30
+    encoder_threads: int | None = None
 
 
 @dataclass(slots=True)
@@ -112,6 +117,15 @@ def load_run_config(path: str | Path) -> RunConfig:
             robot_type=str(recording_raw.get("robot_type", "camera-rig")),
             fps=int(recording_raw["fps"]) if recording_raw.get("fps") is not None else None,
             use_videos=bool(recording_raw.get("use_videos", True)),
+            queue_maxsize=int(recording_raw.get("queue_maxsize", 32)),
+            overflow_policy=str(recording_raw.get("overflow_policy", "fail_recording_keep_stream")),
+            video_codec=str(recording_raw.get("video_codec", "h264")),
+            encoder_queue_maxsize=int(recording_raw.get("encoder_queue_maxsize", 30)),
+            encoder_threads=(
+                int(recording_raw["encoder_threads"])
+                if recording_raw.get("encoder_threads") is not None
+                else None
+            ),
         ),
     )
 

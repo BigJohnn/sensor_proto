@@ -8,7 +8,26 @@ from pathlib import Path
 from unittest.mock import patch
 
 from sensor_proto.cameras.realsense_discovery import RealSenseDeviceInfo, canonicalize_realsense_model
-from sensor_proto.stream_main import build_realsense_stream_config_payload, parse_args, prepare_stream_runtime_config
+from sensor_proto.recording import RecordingStatus
+from sensor_proto.stream_main import (
+    build_realsense_stream_config_payload,
+    close_recording_sink,
+    parse_args,
+    prepare_stream_runtime_config,
+)
+from sensor_proto.stream_server import AlignedSetRepository
+
+
+class _FakeRecordingSink:
+    def __init__(self, status: RecordingStatus) -> None:
+        self._status = status
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+    def status(self) -> RecordingStatus:
+        return self._status
 
 
 class StreamAutoConfigTests(unittest.TestCase):
@@ -180,6 +199,36 @@ class StreamAutoConfigTests(unittest.TestCase):
                         generated_config_path=str(generated_path),
                         expected_cameras=2,
                     )
+
+    def test_close_recording_sink_updates_repository_health(self) -> None:
+        repository = AlignedSetRepository(camera_ids=["rs-00"], recent_sets=1)
+        sink = _FakeRecordingSink(
+            RecordingStatus(
+                enabled=True,
+                active=False,
+                failed=True,
+                overflow_policy="fail_recording_keep_stream",
+                queue_maxsize=32,
+                queue_size=0,
+                queue_high_watermark=12,
+                submitted_sets=20,
+                written_sets=11,
+                dropped_sets=1,
+                queue_full_events=1,
+                first_failure_at_set=42,
+                last_error="recording queue full",
+            )
+        )
+
+        status = close_recording_sink(sink, repository)
+
+        assert status is not None
+        self.assertTrue(sink.closed)
+        self.assertTrue(status.failed)
+        health = repository.health_payload()["recording"]
+        self.assertEqual(health["queue_high_watermark"], 12)
+        self.assertEqual(health["first_failure_at_set"], 42)
+        self.assertEqual(health["last_error"], "recording queue full")
 
 
 if __name__ == "__main__":

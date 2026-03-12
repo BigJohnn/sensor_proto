@@ -189,6 +189,21 @@ class AlignedSetRepository:
         self._latest_sync: dict[str, Any] = {}
         self._latest_cameras: dict[str, Any] = {}
         self._last_error: str | None = None
+        self._recording: dict[str, Any] = {
+            "enabled": False,
+            "active": False,
+            "failed": False,
+            "overflow_policy": None,
+            "queue_maxsize": None,
+            "queue_size": 0,
+            "queue_high_watermark": 0,
+            "submitted_sets": 0,
+            "written_sets": 0,
+            "dropped_sets": 0,
+            "queue_full_events": 0,
+            "first_failure_at_set": None,
+            "last_error": None,
+        }
         self._started_at = time.time()
         self._last_publish_at: float | None = None
         self._published_sets = 0
@@ -258,6 +273,10 @@ class AlignedSetRepository:
         with self._lock:
             self._last_error = message
 
+    def set_recording_status(self, payload: dict[str, object]) -> None:
+        with self._lock:
+            self._recording = dict(payload)
+
     def stop(self) -> None:
         with self._lock:
             self._running = False
@@ -305,6 +324,7 @@ class AlignedSetRepository:
                     "max_encode_ms": round(self._preview_encode_max_ms, 3) if self._preview_encoded_frames else None,
                     "publish_rate_hz": round(self._compute_publish_rate_hz(now_s), 3),
                 },
+                "recording": dict(self._recording),
                 "sync": self._latest_sync,
             }
 

@@ -18,6 +18,11 @@ TASK="${SENSOR_PROTO_RECORD_TASK:-synchronized-multi-camera-observation}"
 ROBOT_TYPE="${SENSOR_PROTO_RECORD_ROBOT_TYPE:-camera-rig}"
 RECORD_FPS="${SENSOR_PROTO_RECORD_FPS:-30}"
 USE_VIDEOS="${SENSOR_PROTO_RECORD_USE_VIDEOS:-true}"
+RECORD_QUEUE_MAXSIZE="${SENSOR_PROTO_RECORD_QUEUE_MAXSIZE:-32}"
+RECORD_OVERFLOW_POLICY="${SENSOR_PROTO_RECORD_OVERFLOW_POLICY:-fail_recording_keep_stream}"
+RECORD_VIDEO_CODEC="${SENSOR_PROTO_RECORD_VIDEO_CODEC:-h264}"
+RECORD_ENCODER_QUEUE_MAXSIZE="${SENSOR_PROTO_RECORD_ENCODER_QUEUE_MAXSIZE:-30}"
+RECORD_ENCODER_THREADS="${SENSOR_PROTO_RECORD_ENCODER_THREADS:-}"
 TARGET_ALIGNED_SETS="${SENSOR_PROTO_RECORD_TARGET_ALIGNED_SETS:-$((DURATION_S * RECORD_FPS))}"
 
 mkdir -p "${REPO_ROOT}/artifacts/lerobot"
@@ -46,6 +51,11 @@ payload["recording"] = {
     "robot_type": ${ROBOT_TYPE@Q},
     "fps": int(${RECORD_FPS@Q}),
     "use_videos": ${USE_VIDEOS@Q}.lower() in {"1", "true", "yes", "on"},
+    "queue_maxsize": int(${RECORD_QUEUE_MAXSIZE@Q}),
+    "overflow_policy": ${RECORD_OVERFLOW_POLICY@Q},
+    "video_codec": ${RECORD_VIDEO_CODEC@Q},
+    "encoder_queue_maxsize": int(${RECORD_ENCODER_QUEUE_MAXSIZE@Q}),
+    "encoder_threads": (int(${RECORD_ENCODER_THREADS@Q}) if ${RECORD_ENCODER_THREADS@Q} else None),
 }
 temp_config.write_text(json.dumps(payload, indent=2) + "\\n", encoding="utf-8")
 PY

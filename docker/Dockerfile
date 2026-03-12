@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.7
-FROM ubuntu:22.04
+FROM osrf/ros2:devel
+
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 

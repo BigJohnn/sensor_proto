@@ -10,7 +10,7 @@ from typing import Any
 
 from sensor_proto.cameras.realsense_discovery import RealSenseDeviceInfo, discover_realsense_devices
 from sensor_proto.config import load_run_config, load_run_config_payload, write_run_config_payload
-from sensor_proto.recording import LeRobotRecorder
+from sensor_proto.recording import RecordingSink
 from sensor_proto.stream_server import AlignedSetRepository, StreamHttpServer, build_dashboard_html
 from sensor_proto.streaming import SynchronizedStreamRunner
 
@@ -53,10 +53,14 @@ def main() -> None:
         preview_max_height=config.stream.preview_max_height,
         preview_jpeg_quality=config.stream.preview_jpeg_quality,
     )
-    recorder = LeRobotRecorder(config) if config.recording.enabled else None
+    recording_sink = RecordingSink.from_config(config) if config.recording.enabled else None
+    repository.set_recording_status(
+        recording_sink.status().as_dict() if recording_sink is not None else RecordingSink.disabled().as_dict()
+    )
     stop_requested = threading.Event()
     server: StreamHttpServer | None = None
     aligned_set_count = 0
+    recording_failure_reported = False
 
     def request_shutdown(message: str, *, mark_error: bool = True) -> None:
         print(f"Stopping stream: {message}", flush=True)
@@ -67,16 +71,18 @@ def main() -> None:
             server.shutdown()
 
     def handle_aligned_set(aligned_set, sync_snapshot, camera_snapshot) -> None:
-        nonlocal aligned_set_count
+        nonlocal aligned_set_count, recording_failure_reported
         if stop_requested.is_set():
             return
         repository.publish(aligned_set, sync_snapshot, camera_snapshot)
-        if recorder is not None:
-            try:
-                recorder.record(aligned_set)
-            except Exception as exc:
-                request_shutdown(f"recording: {exc}")
-                raise
+        if recording_sink is not None:
+            accepted = recording_sink.submit(aligned_set)
+            status = recording_sink.status()
+            repository.set_recording_status(status.as_dict())
+            if not accepted and not recording_failure_reported:
+                if status.last_error is not None:
+                    print(f"Recording degraded: {status.last_error}", flush=True)
+                recording_failure_reported = True
         aligned_set_count += 1
         if args.stop_after_aligned_sets is not None and aligned_set_count >= args.stop_after_aligned_sets:
             request_shutdown(
@@ -118,8 +124,23 @@ def main() -> None:
         repository.stop()
         server.server_close()
         capture_thread.join(timeout=10)
-        if recorder is not None:
-            recorder.close()
+        final_recording_status = close_recording_sink(recording_sink, repository)
+        if final_recording_status is not None and final_recording_status.failed:
+            message = final_recording_status.last_error or "recording failed"
+            print(f"Recording failed before shutdown completed: {message}", flush=True)
+            raise SystemExit(2)
+
+
+def close_recording_sink(
+    recording_sink: RecordingSink | None,
+    repository: AlignedSetRepository,
+):
+    if recording_sink is None:
+        return None
+    recording_sink.close()
+    status = recording_sink.status()
+    repository.set_recording_status(status.as_dict())
+    return status
 
 
 def prepare_stream_runtime_config(template_path: str, generated_config_path: str, expected_cameras: int | None = None) -> str:

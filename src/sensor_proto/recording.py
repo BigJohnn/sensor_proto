@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
+import queue
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from sensor_proto.config import CameraConfig, RunConfig
 from sensor_proto.models import AlignedFrameSet, Frame
@@ -21,6 +24,48 @@ class RecordingSession:
     repo_id: str
     fps: int
     camera_features: dict[str, str]
+    episode_start_timestamp_s: float | None = None
+    aligned_timestamps_s: list[float] | None = None
+
+
+@dataclass(slots=True)
+class RecordingStatus:
+    enabled: bool
+    active: bool
+    failed: bool
+    overflow_policy: str | None
+    queue_maxsize: int | None
+    queue_size: int
+    queue_high_watermark: int
+    submitted_sets: int
+    written_sets: int
+    dropped_sets: int
+    queue_full_events: int
+    first_failure_at_set: int | None
+    last_error: str | None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "enabled": self.enabled,
+            "active": self.active,
+            "failed": self.failed,
+            "overflow_policy": self.overflow_policy,
+            "queue_maxsize": self.queue_maxsize,
+            "queue_size": self.queue_size,
+            "queue_high_watermark": self.queue_high_watermark,
+            "submitted_sets": self.submitted_sets,
+            "written_sets": self.written_sets,
+            "dropped_sets": self.dropped_sets,
+            "queue_full_events": self.queue_full_events,
+            "first_failure_at_set": self.first_failure_at_set,
+            "last_error": self.last_error,
+        }
+
+
+class RecorderBackend(Protocol):
+    def record(self, aligned_set: AlignedFrameSet) -> None: ...
+
+    def close(self) -> None: ...
 
 
 def sanitize_camera_feature_name(camera_id: str) -> str:
@@ -99,11 +144,15 @@ class LeRobotRecorder:
             repo_id=config.recording.repo_id,
             fps=resolve_recording_fps(config),
             camera_features=camera_features,
+            aligned_timestamps_s=[],
         )
         self._dataset = self._create_dataset()
 
     def record(self, aligned_set: AlignedFrameSet) -> None:
         dataset = self._require_dataset()
+        if self.session.episode_start_timestamp_s is None:
+            self.session.episode_start_timestamp_s = aligned_set.reference_timestamp_s
+        relative_timestamp_s = max(0.0, aligned_set.reference_timestamp_s - self.session.episode_start_timestamp_s)
         payload: dict[str, Any] = {"task": self._config.recording.task}
         for camera in self._config.cameras:
             frame = aligned_set.frames.get(camera.id)
@@ -111,6 +160,8 @@ class LeRobotRecorder:
                 raise RecordingError(f"Aligned frame set {aligned_set.set_id} is missing camera {camera.id}.")
             payload[self.session.camera_features[camera.id]] = self._frame_to_rgb_array(frame)
         dataset.add_frame(payload)
+        if self.session.aligned_timestamps_s is not None:
+            self.session.aligned_timestamps_s.append(relative_timestamp_s)
         self._recorded_sets += 1
 
     def close(self) -> None:
@@ -125,16 +176,11 @@ class LeRobotRecorder:
             if finalize is not None:
                 finalize()
             self._finalized = True
+        self._write_aligned_timestamps_sidecar()
 
     def _create_dataset(self):
         dataset_class = self._load_dataset_class()
-        create = dataset_class.create
-        signature = inspect.signature(create)
-        parameters = signature.parameters
-        supports_var_kwargs = any(
-            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
-        )
-        kwargs: dict[str, object] = {
+        create_kwargs: dict[str, object] = {
             "repo_id": self.session.repo_id,
             "fps": self.session.fps,
             "robot_type": self._config.recording.robot_type,
@@ -145,16 +191,39 @@ class LeRobotRecorder:
             ),
             "use_videos": self._config.recording.use_videos,
         }
-        if supports_var_kwargs or "root" in parameters:
-            kwargs["root"] = self.session.root_dir
-        elif "root_dir" in parameters:
-            kwargs["root_dir"] = self.session.root_dir
-        return self._call_with_supported_kwargs(create, kwargs)
+        create_signature = inspect.signature(dataset_class.create)
+        create_parameters = create_signature.parameters
+        create_supports_var_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in create_parameters.values()
+        )
+        if create_supports_var_kwargs or "root" in create_parameters:
+            create_kwargs["root"] = self.session.root_dir
+        elif "root_dir" in create_parameters:
+            create_kwargs["root_dir"] = self.session.root_dir
+        dataset = self._call_with_supported_kwargs(dataset_class.create, create_kwargs)
+        if self._config.recording.use_videos:
+            self._enable_streaming_video_encoding(dataset)
+        return dataset
 
     def _require_dataset(self):
         if self._dataset is None:
             raise RecordingError("LeRobot dataset is not initialized.")
         return self._dataset
+
+    def _write_aligned_timestamps_sidecar(self) -> None:
+        timestamps_s = self.session.aligned_timestamps_s
+        if not timestamps_s:
+            return
+        sidecar_path = self.session.root_dir / "meta" / "aligned_timestamps.json"
+        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": 1,
+            "timeline": "aligned_reference_timestamp_s",
+            "unit": "seconds_from_episode_start",
+            "frame_count": self._recorded_sets,
+            "timestamps_s": timestamps_s,
+        }
+        sidecar_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     def _frame_to_rgb_array(self, frame: Frame):
         if frame.image_data is None or frame.width is None or frame.height is None:
@@ -211,9 +280,171 @@ class LeRobotRecorder:
         )
 
     @staticmethod
+    def _load_video_utils_module():
+        module_paths = (
+            "lerobot.common.datasets.video_utils",
+            "lerobot.datasets.video_utils",
+        )
+        for module_path in module_paths:
+            try:
+                return importlib.import_module(module_path)
+            except ImportError:
+                continue
+        raise RecordingError(
+            "LeRobot video utilities are not available. Install the official `lerobot` package to enable video recording."
+        )
+
+    def _enable_streaming_video_encoding(self, dataset: Any) -> None:
+        video_utils = self._load_video_utils_module()
+        encoder_class = getattr(video_utils, "StreamingVideoEncoder", None)
+        if encoder_class is None:
+            raise RecordingError("LeRobot StreamingVideoEncoder is not available in the runtime environment.")
+        resolve_vcodec = getattr(video_utils, "resolve_vcodec", None)
+        vcodec = self._config.recording.video_codec
+        if callable(resolve_vcodec):
+            vcodec = resolve_vcodec(vcodec)
+        dataset.vcodec = vcodec
+        dataset._encoder_threads = self._config.recording.encoder_threads
+        dataset._streaming_encoder = self._call_with_supported_kwargs(
+            encoder_class,
+            {
+                "fps": self.session.fps,
+                "vcodec": vcodec,
+                "queue_maxsize": self._config.recording.encoder_queue_maxsize,
+                "encoder_threads": self._config.recording.encoder_threads,
+            },
+        )
+
+    @staticmethod
     def _load_numpy_module():
         try:
             import numpy as np
         except ImportError as exc:  # pragma: no cover - depends on runtime environment
             raise RecordingError("Recording LeRobot v3 datasets requires numpy in the runtime environment.") from exc
         return np
+
+
+class RecordingSink:
+    _supported_overflow_policies = {"fail_recording_keep_stream"}
+
+    def __init__(
+        self,
+        recorder: RecorderBackend,
+        *,
+        queue_maxsize: int,
+        overflow_policy: str,
+    ) -> None:
+        if overflow_policy not in self._supported_overflow_policies:
+            raise RecordingError(f"Unsupported recording overflow policy: {overflow_policy}")
+        self._recorder = recorder
+        self._queue_maxsize = max(queue_maxsize, 1)
+        self._overflow_policy = overflow_policy
+        self._queue: queue.Queue[AlignedFrameSet] = queue.Queue(maxsize=self._queue_maxsize)
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._submitted_sets = 0
+        self._written_sets = 0
+        self._dropped_sets = 0
+        self._queue_full_events = 0
+        self._queue_high_watermark = 0
+        self._failed = False
+        self._first_failure_at_set: int | None = None
+        self._last_error: str | None = None
+        self._worker = threading.Thread(target=self._run_worker, name="recording-sink-worker", daemon=True)
+        self._worker.start()
+
+    @classmethod
+    def disabled(cls) -> RecordingStatus:
+        return RecordingStatus(
+            enabled=False,
+            active=False,
+            failed=False,
+            overflow_policy=None,
+            queue_maxsize=None,
+            queue_size=0,
+            queue_high_watermark=0,
+            submitted_sets=0,
+            written_sets=0,
+            dropped_sets=0,
+            queue_full_events=0,
+            first_failure_at_set=None,
+            last_error=None,
+        )
+
+    @classmethod
+    def from_config(cls, config: RunConfig) -> "RecordingSink":
+        if not config.recording.enabled:
+            raise RecordingError("RecordingSink requires recording.enabled=true.")
+        return cls(
+            LeRobotRecorder(config),
+            queue_maxsize=config.recording.queue_maxsize,
+            overflow_policy=config.recording.overflow_policy,
+        )
+
+    def submit(self, aligned_set: AlignedFrameSet) -> bool:
+        with self._lock:
+            if self._failed:
+                return False
+            try:
+                self._queue.put_nowait(aligned_set)
+            except queue.Full:
+                self._queue_full_events += 1
+                self._dropped_sets += 1
+                self._failed = True
+                self._first_failure_at_set = aligned_set.set_id
+                self._last_error = (
+                    "recording queue full; marking recording failed while keeping stream alive "
+                    f"(queue_maxsize={self._queue_maxsize})"
+                )
+                self._stop_event.set()
+                return False
+            self._queue_high_watermark = max(self._queue_high_watermark, self._queue.qsize())
+            self._submitted_sets += 1
+            return True
+
+    def close(self) -> None:
+        self._stop_event.set()
+        self._worker.join(timeout=30)
+        self._recorder.close()
+
+    def status(self) -> RecordingStatus:
+        with self._lock:
+            return RecordingStatus(
+                enabled=True,
+                active=not self._stop_event.is_set() and not self._failed,
+                failed=self._failed,
+                overflow_policy=self._overflow_policy,
+                queue_maxsize=self._queue_maxsize,
+                queue_size=self._queue.qsize(),
+                queue_high_watermark=self._queue_high_watermark,
+                submitted_sets=self._submitted_sets,
+                written_sets=self._written_sets,
+                dropped_sets=self._dropped_sets,
+                queue_full_events=self._queue_full_events,
+                first_failure_at_set=self._first_failure_at_set,
+                last_error=self._last_error,
+            )
+
+    def _mark_worker_failure(self, message: str) -> None:
+        with self._lock:
+            self._failed = True
+            self._last_error = message
+            self._stop_event.set()
+
+    def _run_worker(self) -> None:
+        while True:
+            if self._stop_event.is_set() and self._queue.empty():
+                return
+            try:
+                aligned_set = self._queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            try:
+                self._recorder.record(aligned_set)
+                with self._lock:
+                    self._written_sets += 1
+            except Exception as exc:
+                self._mark_worker_failure(f"recording worker failed: {exc}")
+                return
+            finally:
+                self._queue.task_done()

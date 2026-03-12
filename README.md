@@ -162,7 +162,8 @@ bash scripts/run_episode_rerun.sh artifacts/lerobot/hw-10s-episode-20260312T1342
 - 脚本运行在 host
 - 输入是一个已经落盘完成的 LeRobot v3 episode 目录
 - 自动从 `meta/info.json` 和 `videos/` 发现相机和视频文件
-- 直接把每路 MP4 作为 `rerun-sdk` 的 `AssetVideo` 记录到时间轴
+- 如果 episode 带有 `meta/aligned_timestamps.json`，则优先按真实 aligned-set 时间轴重播
+- 否则回退到 MP4 自带的名义帧时间轴
 - 默认会自动拉起本地 Rerun viewer
 
 ## Host 侧抓拍
@@ -207,6 +208,26 @@ host 侧 viewer 和 Python client 依赖：
 - `numpy`
 - `cv2`
 - `uv`
+- `ffmpeg` 可执行文件，版本需 `>= 5.1`
+
+如果要用 `make episode-rerun`，host 上需要先有 `ffmpeg >= 5.1`。
+注意：Ubuntu 22.04 系统仓库自带的 `ffmpeg 4.4.x` 不够新，Rerun 仍会拒绝解码。
+
+脚本会在启动前检查版本；如果你的新版 ffmpeg 不在默认 PATH 里，可以显式指定：
+
+```bash
+SENSOR_PROTO_RERUN_FFMPEG_PATH=/path/to/ffmpeg make episode-rerun EPISODE=artifacts/lerobot/<episode_dir>
+```
+
+Ubuntu 22.04 若临时只想装系统包，可以先装上旧版用于其他工具：
+
+```bash
+sudo apt-get install -y ffmpeg
+```
+
+Python 侧的 replay 依赖已经写在项目 extras 里：`.[replay]`。
+
+`make episode-rerun` 启动前还会把 Rerun 的本地持久化配置同步到当前 host 的 `ffmpeg` 路径，避免 viewer 自己的 spawn/config 链拿不到系统 PATH 时仍然报 “Couldn't find an installation of the FFmpeg executable”。
 
 仓库已经通过脚本和 `make` 目标固化了必要环境变量，不需要手写长串命令。
 
@@ -248,6 +269,10 @@ bash scripts/record_stream_episode.sh 10
 - 在启动前临时注入 `recording` 配置，但不写死真实相机列表
 - 启动时自动探测当前在线 RealSense，并生成运行时配置
 - 以 `300` 个对齐帧作为默认停止条件（约等于 `10` 秒 @ `30fps`）
+- 通过独立 recording worker + bounded queue 落盘，避免 LeRobot 写盘直接阻塞主同步消费链
+- LeRobot video 路径优先启用流式编码，避免默认的 per-frame PNG 临时文件落盘
+- 默认在 recording 队列打满时将 recording 标记为 failed，但保持 stream 服务继续运行
+- 如果本次批量录制过程中 recording 已失败，命令会在 shutdown 后以非零状态退出，避免误报成功
 - 给 LeRobot v3 的视频编码和 `finalize()` 预留足够的收尾时间
 - 另外保留一个独立 watchdog，防止硬件异常时无限挂住
 
@@ -255,6 +280,12 @@ bash scripts/record_stream_episode.sh 10
 
 - 数据集输出到 `artifacts/lerobot/hw-10s-episode-<timestamp>`
 - 运行时配置输出到 [realsense-8cam-stream-recording-runtime.json](/home/corenetic/Code/sensor_proto/artifacts/realsense-8cam-stream-recording-runtime.json)
+- 真实对齐时间轴输出到 `meta/aligned_timestamps.json`，供 host 侧 replay 保持实际采集节奏
+
+默认 recording 队列配置：
+
+- `recording.queue_maxsize = 32`
+- `recording.overflow_policy = fail_recording_keep_stream`
 
 可选环境变量：
 
@@ -263,6 +294,11 @@ bash scripts/record_stream_episode.sh 10
 - `SENSOR_PROTO_RECORD_MAX_RUNTIME_S`
 - `SENSOR_PROTO_RECORD_TARGET_ALIGNED_SETS`
 - `SENSOR_PROTO_RECORD_FPS`
+- `SENSOR_PROTO_RECORD_QUEUE_MAXSIZE`
+- `SENSOR_PROTO_RECORD_OVERFLOW_POLICY`
+- `SENSOR_PROTO_RECORD_VIDEO_CODEC`
+- `SENSOR_PROTO_RECORD_ENCODER_QUEUE_MAXSIZE`
+- `SENSOR_PROTO_RECORD_ENCODER_THREADS`
 - `SENSOR_PROTO_RECORD_TASK`
 - `SENSOR_PROTO_RECORD_REPO_ID`
 - `SENSOR_PROTO_RECORD_ROBOT_TYPE`

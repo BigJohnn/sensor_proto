@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -10,6 +12,7 @@ from sensor_proto.config import CameraConfig, RecordingConfig, RunConfig
 from sensor_proto.models import AlignedFrameSet, Frame
 from sensor_proto.recording import (
     LeRobotRecorder,
+    RecordingSink,
     RecordingError,
     build_camera_feature_map,
     resolve_recording_fps,
@@ -18,19 +21,42 @@ from sensor_proto.recording import (
 
 class FakeLeRobotDataset:
     last_instance = None
+    create_kwargs = None
 
     @classmethod
     def create(cls, **kwargs):
         root = kwargs.get("root") or kwargs.get("root_dir")
         if root is not None and Path(root).exists():
             raise AssertionError("LeRobot dataset root should not exist before create().")
-        instance = cls()
+        cls.create_kwargs = kwargs
+        instance = cls(repo_id=kwargs["repo_id"], root=root)
         instance.created_kwargs = kwargs
         instance.frames = []
         instance.saved_task = None
         instance.finalized = False
+        instance._streaming_encoder = None
         cls.last_instance = instance
         return instance
+
+    def __init__(
+        self,
+        repo_id=None,
+        root=None,
+        streaming_encoding=False,
+        vcodec=None,
+        encoder_queue_maxsize=None,
+        encoder_threads=None,
+    ):
+        self.repo_id = repo_id
+        self.root = Path(root).resolve() if root is not None else None
+        self.streaming_encoding = streaming_encoding
+        self.vcodec = vcodec
+        self.encoder_queue_maxsize = encoder_queue_maxsize
+        self.encoder_threads = encoder_threads
+        self.frames = []
+        self.saved_task = None
+        self.finalized = False
+        type(self).last_instance = self
 
     def add_frame(self, payload):
         self.frames.append(payload)
@@ -40,6 +66,41 @@ class FakeLeRobotDataset:
 
     def finalize(self):
         self.finalized = True
+
+
+class FakeStreamingVideoEncoder:
+    last_instance = None
+
+    def __init__(self, fps, vcodec="libsvtav1", queue_maxsize=30, encoder_threads=None):
+        self.fps = fps
+        self.vcodec = vcodec
+        self.queue_maxsize = queue_maxsize
+        self.encoder_threads = encoder_threads
+        type(self).last_instance = self
+
+
+class FakeRecorderBackend:
+    def __init__(self) -> None:
+        self.recorded: list[int] = []
+        self.closed = False
+
+    def record(self, aligned_set: AlignedFrameSet) -> None:
+        self.recorded.append(aligned_set.set_id)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class BlockingRecorderBackend(FakeRecorderBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def record(self, aligned_set: AlignedFrameSet) -> None:
+        self.started.set()
+        self.release.wait(timeout=2.0)
+        super().record(aligned_set)
 
 
 def build_run_config(root_dir: str, *, fps_a: int = 30, fps_b: int = 30) -> RunConfig:
@@ -123,11 +184,17 @@ class RecordingTests(unittest.TestCase):
             resolve_recording_fps(config)
 
     def test_recorder_adds_aligned_frames_and_finalizes_episode(self) -> None:
-        fake_module = types.SimpleNamespace(LeRobotDataset=FakeLeRobotDataset)
+        fake_dataset_module = types.SimpleNamespace(LeRobotDataset=FakeLeRobotDataset)
+        fake_video_utils_module = types.SimpleNamespace(
+            StreamingVideoEncoder=FakeStreamingVideoEncoder,
+            resolve_vcodec=lambda codec: codec,
+        )
 
         def fake_import_module(name: str):
             if name == "lerobot.common.datasets.lerobot_dataset":
-                return fake_module
+                return fake_dataset_module
+            if name == "lerobot.common.datasets.video_utils":
+                return fake_video_utils_module
             raise ImportError(name)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -137,17 +204,23 @@ class RecordingTests(unittest.TestCase):
                 recorder = LeRobotRecorder(config)
                 recorder.record(build_aligned_set())
                 recorder.close()
+            sidecar = json.loads((Path(target_root) / "meta" / "aligned_timestamps.json").read_text(encoding="utf-8"))
 
         dataset = FakeLeRobotDataset.last_instance
         self.assertIsNotNone(dataset)
         assert dataset is not None
-        self.assertEqual(dataset.created_kwargs["repo_id"], "local/test-rig")
-        self.assertEqual(dataset.created_kwargs["fps"], 30)
-        self.assertEqual(dataset.created_kwargs["root"], Path(target_root).resolve())
+        self.assertEqual(FakeLeRobotDataset.create_kwargs["repo_id"], "local/test-rig")
+        self.assertEqual(FakeLeRobotDataset.create_kwargs["fps"], 30)
+        self.assertEqual(FakeLeRobotDataset.create_kwargs["root"], Path(target_root).resolve())
         self.assertEqual(
-            set(dataset.created_kwargs["features"]),
+            set(FakeLeRobotDataset.create_kwargs["features"]),
             {"observation.images.rs_00", "observation.images.rs_00_2"},
         )
+        self.assertIsNotNone(dataset._streaming_encoder)
+        self.assertIsInstance(dataset._streaming_encoder, FakeStreamingVideoEncoder)
+        self.assertEqual(dataset.vcodec, "h264")
+        self.assertEqual(dataset._streaming_encoder.queue_maxsize, 30)
+        self.assertEqual(dataset._streaming_encoder.encoder_threads, None)
         self.assertEqual(len(dataset.frames), 1)
         payload = dataset.frames[0]
         self.assertEqual(set(payload), {"task", "observation.images.rs_00", "observation.images.rs_00_2"})
@@ -155,8 +228,49 @@ class RecordingTests(unittest.TestCase):
         self.assertEqual(payload["observation.images.rs_00"].shape, (1, 1, 3))
         self.assertEqual(payload["observation.images.rs_00"].tolist(), [[[3, 2, 1]]])
         self.assertEqual(payload["observation.images.rs_00_2"].tolist(), [[[6, 5, 4]]])
+        self.assertEqual(sidecar["timeline"], "aligned_reference_timestamp_s")
+        self.assertEqual(sidecar["frame_count"], 1)
+        self.assertEqual(sidecar["timestamps_s"], [0.0])
         self.assertEqual(dataset.saved_task, "collect-observations")
         self.assertTrue(dataset.finalized)
+
+    def test_recording_sink_writes_frames_on_background_worker(self) -> None:
+        backend = FakeRecorderBackend()
+        sink = RecordingSink(backend, queue_maxsize=2, overflow_policy="fail_recording_keep_stream")
+
+        accepted = sink.submit(build_aligned_set())
+        sink.close()
+
+        self.assertTrue(accepted)
+        self.assertEqual(backend.recorded, [7])
+        self.assertTrue(backend.closed)
+        status = sink.status()
+        self.assertEqual(status.submitted_sets, 1)
+        self.assertEqual(status.written_sets, 1)
+        self.assertFalse(status.failed)
+        self.assertEqual(status.queue_high_watermark, 1)
+        self.assertIsNone(status.first_failure_at_set)
+
+    def test_recording_sink_fails_open_when_queue_fills(self) -> None:
+        backend = BlockingRecorderBackend()
+        sink = RecordingSink(backend, queue_maxsize=1, overflow_policy="fail_recording_keep_stream")
+
+        self.assertTrue(sink.submit(build_aligned_set()))
+        backend.started.wait(timeout=1.0)
+        self.assertTrue(sink.submit(build_aligned_set()))
+        self.assertFalse(sink.submit(build_aligned_set()))
+        status = sink.status()
+        self.assertTrue(status.failed)
+        self.assertEqual(status.queue_full_events, 1)
+        self.assertEqual(status.dropped_sets, 1)
+        self.assertEqual(status.first_failure_at_set, 7)
+        self.assertEqual(status.queue_high_watermark, 1)
+
+        backend.release.set()
+        sink.close()
+
+        self.assertTrue(backend.closed)
+        self.assertEqual(backend.recorded, [7, 7])
 
 
 if __name__ == "__main__":

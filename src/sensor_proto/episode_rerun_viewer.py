@@ -12,6 +12,7 @@ class EpisodeMetadata:
     fps: float
     camera_ids: list[str]
     total_frames: int
+    aligned_timestamps_s: list[float] | None = None
 
 
 @dataclass(slots=True)
@@ -53,7 +54,23 @@ def load_episode_metadata(episode_dir: str | Path) -> EpisodeMetadata:
         fps=float(payload.get("fps", 30.0)),
         camera_ids=camera_ids,
         total_frames=int(payload.get("total_frames", 0)),
+        aligned_timestamps_s=load_aligned_timestamps(root_dir, total_frames=int(payload.get("total_frames", 0))),
     )
+
+
+def load_aligned_timestamps(root_dir: str | Path, *, total_frames: int) -> list[float] | None:
+    sidecar_path = Path(root_dir) / "meta" / "aligned_timestamps.json"
+    if not sidecar_path.exists():
+        return None
+    payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    timestamps_s = payload.get("timestamps_s")
+    if not isinstance(timestamps_s, list) or not all(isinstance(value, (int, float)) for value in timestamps_s):
+        raise ValueError(f"Invalid aligned timestamp payload in {sidecar_path}")
+    if total_frames > 0 and len(timestamps_s) != total_frames:
+        raise ValueError(
+            f"Aligned timestamp count mismatch in {sidecar_path}: expected {total_frames}, got {len(timestamps_s)}"
+        )
+    return [float(value) for value in timestamps_s]
 
 
 def discover_video_streams(metadata: EpisodeMetadata) -> list[VideoStream]:
@@ -111,14 +128,25 @@ def main() -> None:
         video_asset = rr.AssetVideo(path=stream.path)
         rr.log(entity_path, video_asset, static=True)
         frame_timestamps_ns = video_asset.read_frame_timestamps_nanos()
-        frame_count = len(frame_timestamps_ns)
+        timeline_timestamps_ns = resolve_timeline_timestamps_ns(metadata, frame_timestamps_ns)
         rr.send_columns(
             entity_path,
             indexes=[
-                rr.TimeColumn("time", duration=1e-9 * frame_timestamps_ns),
+                rr.TimeColumn("time", duration=[value * 1e-9 for value in timeline_timestamps_ns]),
             ],
             columns=rr.VideoFrameReference.columns_nanos(frame_timestamps_ns),
         )
+
+
+def resolve_timeline_timestamps_ns(metadata: EpisodeMetadata, frame_timestamps_ns) -> list[int]:
+    if metadata.aligned_timestamps_s is None:
+        return [int(value) for value in frame_timestamps_ns]
+    if len(metadata.aligned_timestamps_s) != len(frame_timestamps_ns):
+        raise ValueError(
+            "Aligned timestamp count does not match decoded video frame count: "
+            f"{len(metadata.aligned_timestamps_s)} != {len(frame_timestamps_ns)}"
+        )
+    return [int(timestamp_s * 1_000_000_000.0) for timestamp_s in metadata.aligned_timestamps_s]
 
 
 if __name__ == "__main__":

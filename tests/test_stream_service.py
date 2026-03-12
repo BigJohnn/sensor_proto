@@ -43,6 +43,23 @@ class StreamServiceTests(unittest.TestCase):
 
     def test_repository_exposes_latest_aligned_set_payload(self) -> None:
         repository = AlignedSetRepository(camera_ids=["cam-a", "cam-b"], recent_sets=2)
+        repository.set_recording_status(
+            {
+                "enabled": True,
+                "active": True,
+                "failed": False,
+                "overflow_policy": "fail_recording_keep_stream",
+                "queue_maxsize": 8,
+                "queue_size": 1,
+                "queue_high_watermark": 4,
+                "submitted_sets": 3,
+                "written_sets": 2,
+                "dropped_sets": 0,
+                "queue_full_events": 0,
+                "first_failure_at_set": None,
+                "last_error": None,
+            }
+        )
         aligned_set = AlignedFrameSet(
             set_id=3,
             reference_camera_id="cam-a",
@@ -112,6 +129,11 @@ class StreamServiceTests(unittest.TestCase):
         self.assertEqual(preview_health["last_size_bytes"], len(b"preview-jpeg"))
         self.assertEqual(preview_health["encoded_frames"], 1)
         self.assertEqual(preview_health["publish_rate_hz"], 0.0)
+        recording_health = repository.health_payload()["recording"]
+        self.assertTrue(recording_health["enabled"])
+        self.assertEqual(recording_health["queue_size"], 1)
+        self.assertEqual(recording_health["queue_high_watermark"], 4)
+        self.assertEqual(recording_health["written_sets"], 2)
 
 
 if __name__ == "__main__":
