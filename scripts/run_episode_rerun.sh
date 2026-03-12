@@ -13,7 +13,5 @@ fi
 
 uv run --no-project \
   --with rerun-sdk \
-  --with numpy \
-  --with opencv-python-headless \
   --python "${SENSOR_PROTO_PYTHON}" \
   python -m sensor_proto.episode_rerun_viewer "$@"

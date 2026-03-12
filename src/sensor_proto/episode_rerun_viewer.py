@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import time
 from dataclasses import dataclass
 from pathlib import Path
-
-from sensor_proto.preview import compute_grid_layout
 
 
 @dataclass(slots=True)
@@ -28,9 +25,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("episode_dir", help="Path to the recorded LeRobot episode directory.")
     parser.add_argument("--app-id", default="sensor-proto-episode-viewer", help="Rerun application id.")
     parser.add_argument("--entity-root", default="episode", help="Root entity path in Rerun.")
-    parser.add_argument("--max-width", type=int, default=1600, help="Maximum mosaic width in pixels.")
-    parser.add_argument("--max-height", type=int, default=900, help="Maximum mosaic height in pixels.")
-    parser.add_argument("--sleep-ms", type=int, default=0, help="Optional delay after each logged frame.")
     parser.add_argument(
         "--spawn",
         action=argparse.BooleanOptionalAction,
@@ -72,70 +66,16 @@ def discover_video_streams(metadata: EpisodeMetadata) -> list[VideoStream]:
     return streams
 
 
-def build_mosaic(frames: dict[str, object], camera_order: list[str], max_width: int, max_height: int):
-    if not camera_order:
-        raise ValueError("camera_order must not be empty.")
-    cv2 = _load_cv2_module()
-    np = _load_numpy_module()
-    first_frame = frames[camera_order[0]]
-    frame_height, frame_width = first_frame.shape[:2]
-    layout = compute_grid_layout(
-        frame_width=frame_width,
-        frame_height=frame_height,
-        camera_count=len(camera_order),
-        max_width=max_width,
-        max_height=max_height,
-    )
-    canvas = np.zeros((layout.canvas_height, layout.canvas_width, 3), dtype=np.uint8)
-    canvas[:] = (9, 17, 26)
-    gap_px = 12
-    header_px = 72
-    cv2.putText(
-        canvas,
-        f"cams={len(camera_order)}  size={frame_width}x{frame_height}",
-        (gap_px, 32),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (236, 242, 248),
-        2,
-        cv2.LINE_AA,
-    )
-    for index, camera_id in enumerate(camera_order):
-        row = index // layout.cols
-        col = index % layout.cols
-        x = gap_px + col * (layout.cell_width + gap_px)
-        y = header_px + gap_px + row * (layout.cell_height + gap_px)
-        frame = frames[camera_id]
-        resized = cv2.resize(frame, (layout.cell_width, layout.cell_height), interpolation=cv2.INTER_AREA)
-        canvas[y : y + layout.cell_height, x : x + layout.cell_width] = resized
-        cv2.rectangle(canvas, (x, y), (x + layout.cell_width, y + layout.cell_height), (83, 209, 201), 1)
-        cv2.putText(
-            canvas,
-            camera_id,
-            (x + 8, y + 22),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (255, 209, 102),
-            2,
-            cv2.LINE_AA,
+def build_blueprint(entity_root: str, camera_ids: list[str]):
+    rrb = _load_rerun_blueprint_module()
+    views = [
+        rrb.Spatial2DView(
+            origin=f"{entity_root}/cameras/{camera_id}",
+            name=camera_id,
         )
-    return canvas
-
-
-def _load_cv2_module():
-    try:
-        import cv2
-    except ImportError as exc:  # pragma: no cover - depends on host environment
-        raise RuntimeError("Episode Rerun viewer requires cv2 on the host.") from exc
-    return cv2
-
-
-def _load_numpy_module():
-    try:
-        import numpy as np
-    except ImportError as exc:  # pragma: no cover - depends on host environment
-        raise RuntimeError("Episode Rerun viewer requires numpy on the host.") from exc
-    return np
+        for camera_id in camera_ids
+    ]
+    return rrb.Grid(contents=views, grid_columns=max(1, min(3, len(views))))
 
 
 def _load_rerun_module():
@@ -146,45 +86,37 @@ def _load_rerun_module():
     return rr
 
 
+def _load_rerun_blueprint_module():
+    try:
+        import rerun.blueprint as rrb
+    except ImportError as exc:  # pragma: no cover - depends on host environment
+        raise RuntimeError("Episode Rerun viewer requires rerun-sdk blueprint support on the host.") from exc
+    return rrb
+
+
 def main() -> None:
     args = parse_args()
     metadata = load_episode_metadata(args.episode_dir)
     streams = discover_video_streams(metadata)
     rr = _load_rerun_module()
-    cv2 = _load_cv2_module()
 
     rr.init(args.app_id, spawn=args.spawn)
+    rr.send_blueprint(build_blueprint(args.entity_root, metadata.camera_ids))
 
-    captures = {stream.camera_id: cv2.VideoCapture(str(stream.path)) for stream in streams}
-    try:
-        for camera_id, capture in captures.items():
-            if not capture.isOpened():
-                raise RuntimeError(f"Failed to open video for {camera_id}: {captures[camera_id]}")
-
-        frame_index = 0
-        while True:
-            frames: dict[str, object] = {}
-            for stream in streams:
-                ok, frame = captures[stream.camera_id].read()
-                if not ok:
-                    return
-                frames[stream.camera_id] = frame
-
-            rr.set_time_sequence("frame", frame_index)
-            rr.set_time_seconds("time", frame_index / metadata.fps)
-
-            for camera_id in metadata.camera_ids:
-                rr.log(f"{args.entity_root}/cameras/{camera_id}", rr.Image(frames[camera_id][:, :, ::-1]))
-
-            mosaic = build_mosaic(frames, metadata.camera_ids, max_width=args.max_width, max_height=args.max_height)
-            rr.log(f"{args.entity_root}/mosaic", rr.Image(mosaic[:, :, ::-1]))
-
-            frame_index += 1
-            if args.sleep_ms > 0:
-                time.sleep(args.sleep_ms / 1000.0)
-    finally:
-        for capture in captures.values():
-            capture.release()
+    for stream in streams:
+        entity_path = f"{args.entity_root}/cameras/{stream.camera_id}"
+        video_asset = rr.AssetVideo(path=stream.path)
+        rr.log(entity_path, video_asset, static=True)
+        frame_timestamps_ns = video_asset.read_frame_timestamps_nanos()
+        frame_count = len(frame_timestamps_ns)
+        rr.send_columns(
+            entity_path,
+            indexes=[
+                rr.TimeColumn("frame", sequence=list(range(frame_count))),
+                rr.TimeColumn("time", duration=1e-9 * frame_timestamps_ns),
+            ],
+            columns=rr.VideoFrameReference.columns_nanos(frame_timestamps_ns),
+        )
 
 
 if __name__ == "__main__":

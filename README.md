@@ -162,7 +162,7 @@ bash scripts/run_episode_rerun.sh artifacts/lerobot/hw-10s-episode-20260312T1342
 - 脚本运行在 host
 - 输入是一个已经落盘完成的 LeRobot v3 episode 目录
 - 自动从 `meta/info.json` 和 `videos/` 发现相机和视频文件
-- 用 `rerun-sdk` 记录每路相机图像以及一张 mosaic 总览
+- 直接把每路 MP4 作为 `rerun-sdk` 的 `AssetVideo` 记录到时间轴
 - 默认会自动拉起本地 Rerun viewer
 
 ## Host 侧抓拍
