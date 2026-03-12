@@ -75,7 +75,10 @@ def build_blueprint(entity_root: str, camera_ids: list[str]):
         )
         for camera_id in camera_ids
     ]
-    return rrb.Grid(contents=views, grid_columns=max(1, min(3, len(views))))
+    return rrb.Blueprint(
+        rrb.Grid(contents=views, grid_columns=max(1, min(3, len(views)))),
+        rrb.TimePanel(timeline="time", playback_speed=1.0),
+    )
 
 
 def _load_rerun_module():
@@ -112,7 +115,6 @@ def main() -> None:
         rr.send_columns(
             entity_path,
             indexes=[
-                rr.TimeColumn("frame", sequence=list(range(frame_count))),
                 rr.TimeColumn("time", duration=1e-9 * frame_timestamps_ns),
             ],
             columns=rr.VideoFrameReference.columns_nanos(frame_timestamps_ns),
