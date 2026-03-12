@@ -19,7 +19,9 @@
 
 - 后台采集线程持续读取 `8` 路 RealSense
 - 使用现有 [src/sensor_proto/synchronization.py](/home/corenetic/Code/sensor_proto/src/sensor_proto/synchronization.py) 生成 `AlignedFrameSet`
-- HTTP 服务暴露最新同步帧集元数据与逐路图像
+- HTTP 服务同时暴露：
+  - 完整同步数据路径：最新同步帧集元数据与逐路图像
+  - 低延迟 preview 路径：latest-only mosaic 单图预览
 
 当前推流服务以 [configs/realsense-8cam-session.json](/home/corenetic/Code/sensor_proto/configs/realsense-8cam-session.json) 作为模板配置；启动时先探测当前有效连接的 RealSense，相机序列号和关键设备信息会被提取出来，并自动生成运行时配置后再启动推流。
 
@@ -30,6 +32,7 @@
 - 元数据接口：`/api/health`
 - 最新同步帧集接口：`/api/latest-set`
 - 单路图像接口：`/api/sets/{set_id}/frames/{camera_id}.bmp`
+- preview 接口：`/api/preview.jpg`
 - 可视化页面：`/`
 
 图像以 BMP 返回，原因是：
@@ -37,6 +40,13 @@
 - 不引入 Pillow/OpenCV 作为服务端硬依赖
 - 浏览器可直接显示
 - Python 客户端可直接解码为 OpenCV `ndarray`
+
+新增 preview 通道后：
+
+- 完整数据路径仍保持 BMP + 逐路拉取，供调试和算法消费
+- preview 路径改为服务端直接生成单张 mosaic `JPEG`
+- 该路径只追最新、允许覆盖旧帧，不承担同步数据分发职责
+- 因为 mosaic 在服务端编码，`sensor-stream` 容器需要提供 `numpy` 与 headless OpenCV
 
 ### 3. 自动探测与配置生成
 
@@ -137,26 +147,32 @@ aligned = client.get_latest_aligned_set()
 - HTTP 推流服务
 - 浏览器可视化页面
 - host 侧 Python/OpenCV client SDK
+- host 侧单次拉取 preview mosaic 能力
 - host 侧最小 CLI 工具
 - `docker compose` 下的 `sensor-stream` 服务定义
 - 基础单元测试
 
 待补齐：
-
-- 一次 API 拉取完整同步帧集的更高效传输方式评估
+- preview 通道的进一步 profile 与质量参数调优
 
 ## 工程判断
 
-当前实现已经满足“同步后转发到 host 并可视化”的最小闭环；但若目标是让 host 侧算法代码直接消费同步帧集，则必须补上 Python client 层，避免每个调用方自行拼装：
+当前实现已经满足“同步后转发到 host 并可视化”的最小闭环；目前已明确拆成两条路径：
+
+- `data path`：`AlignedFrameSet` 元数据 + 单路 BMP，保留完整同步语义
+- `preview path`：服务端直接输出单张 preview mosaic，供人眼低延迟预览
+
+若目标是让 host 侧算法代码直接消费同步帧集，则继续使用 Python client 的完整数据接口：
 
 - 现已提供 [stream_client.py](/home/corenetic/Code/sensor_proto/src/sensor_proto/stream_client.py)
 - 主接口为 `frames, timestamp = client.get_latest_aligned_frames()`
 - 详细接口为 `client.get_latest_aligned_set()`
+- 低延迟预览接口为 `client.get_latest_preview()`
 - Host 环境需自行提供 `numpy` 与 `cv2`
 
 下一步推荐工作：
 
-1. 评估一次 API 直接返回完整同步帧集的传输方案，减少逐路 HTTP 拉取开销
+1. 对 `/api/preview.jpg` 做端到端 profile，量化 mosaic 编码耗时
 2. 明确 host 环境的 OpenCV 依赖安装方式
 3. 评估 CLI 是否需要增加连续轮询模式
 

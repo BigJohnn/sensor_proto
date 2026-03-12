@@ -22,6 +22,15 @@ class AlignedFrameBundle:
     raw_payload: dict[str, Any]
 
 
+@dataclass(slots=True)
+class PreviewFrameBundle:
+    set_id: int
+    timestamp: float
+    skew_ms: float
+    camera_count: int
+    frame: Any
+
+
 class AlignedStreamClient:
     def __init__(self, base_url: str, timeout_s: float = 5.0) -> None:
         self._base_url = base_url.rstrip("/")
@@ -54,6 +63,16 @@ class AlignedStreamClient:
             raw_payload=payload,
         )
 
+    def get_latest_preview(self) -> PreviewFrameBundle:
+        payload, headers = self._get_bytes_with_headers("/api/preview.jpg")
+        return PreviewFrameBundle(
+            set_id=self._read_int_header(headers, "X-SensorProto-Set-Id"),
+            timestamp=self._read_float_header(headers, "X-SensorProto-Reference-Timestamp-S"),
+            skew_ms=self._read_float_header(headers, "X-SensorProto-Skew-Ms"),
+            camera_count=self._read_int_header(headers, "X-SensorProto-Camera-Count"),
+            frame=self._decode_image(payload),
+        )
+
     def get_health(self) -> dict[str, Any]:
         return self._get_json("/api/health")
 
@@ -62,10 +81,14 @@ class AlignedStreamClient:
         return json.loads(payload.decode("utf-8"))
 
     def _get_bytes(self, path: str) -> bytes:
+        payload, _ = self._get_bytes_with_headers(path)
+        return payload
+
+    def _get_bytes_with_headers(self, path: str) -> tuple[bytes, Any]:
         url = f"{self._base_url}{path}"
         try:
             with request.urlopen(url, timeout=self._timeout_s) as response:
-                return response.read()
+                return response.read(), response.headers
         except error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
             raise StreamClientError(f"HTTP {exc.code} for {url}: {body}") from exc
@@ -73,7 +96,7 @@ class AlignedStreamClient:
             raise StreamClientError(f"Failed to reach stream service at {url}: {exc.reason}") from exc
 
     @staticmethod
-    def _decode_bmp(payload: bytes):
+    def _decode_image(payload: bytes):
         try:
             import cv2
             import numpy as np
@@ -83,5 +106,23 @@ class AlignedStreamClient:
         encoded = np.frombuffer(payload, dtype=np.uint8)
         frame = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
         if frame is None:
-            raise StreamClientError("OpenCV failed to decode BMP payload from stream service.")
+            raise StreamClientError("OpenCV failed to decode image payload from stream service.")
         return frame
+
+    @staticmethod
+    def _decode_bmp(payload: bytes):
+        return AlignedStreamClient._decode_image(payload)
+
+    @staticmethod
+    def _read_int_header(headers: Any, name: str) -> int:
+        value = headers.get(name)
+        if value is None:
+            raise StreamClientError(f"Stream service response is missing required header: {name}")
+        return int(value)
+
+    @staticmethod
+    def _read_float_header(headers: Any, name: str) -> float:
+        value = headers.get(name)
+        if value is None:
+            raise StreamClientError(f"Stream service response is missing required header: {name}")
+        return float(value)

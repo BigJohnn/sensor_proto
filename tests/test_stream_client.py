@@ -62,6 +62,27 @@ class StreamClientTests(unittest.TestCase):
             with self.assertRaises(StreamClientError):
                 client._get_bytes("/api/health")
 
+    def test_get_latest_preview_returns_single_image_and_metadata(self) -> None:
+        client = AlignedStreamClient("http://127.0.0.1:8787")
+        preview_headers = {
+            "X-SensorProto-Set-Id": "21",
+            "X-SensorProto-Reference-Timestamp-S": "456.789",
+            "X-SensorProto-Skew-Ms": "9.250",
+            "X-SensorProto-Camera-Count": "8",
+        }
+
+        with (
+            patch.object(client, "_get_bytes_with_headers", return_value=(b"jpeg", preview_headers)),
+            patch.object(client, "_decode_image", return_value="preview-frame"),
+        ):
+            preview = client.get_latest_preview()
+
+        self.assertEqual(preview.set_id, 21)
+        self.assertEqual(preview.timestamp, 456.789)
+        self.assertEqual(preview.skew_ms, 9.25)
+        self.assertEqual(preview.camera_count, 8)
+        self.assertEqual(preview.frame, "preview-frame")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -35,6 +35,7 @@ COPY tests ./tests
 COPY configs ./configs
 
 RUN python3 -m pip install --upgrade pip setuptools wheel pytest && \
+    python3 -m pip install numpy opencv-python-headless && \
     python3 -m pip install -e .
 
 RUN if [ "${INSTALL_REALSENSE}" = "1" ]; then \

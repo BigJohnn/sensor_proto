@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from sensor_proto.models import AlignedFrameSet, Frame
+from sensor_proto.preview import compute_grid_layout
 
 
 def encode_bgr_frame_as_bmp(frame: Frame) -> bytes:
@@ -55,6 +56,119 @@ def encode_bgr_frame_as_bmp(frame: Frame) -> bytes:
     return header + dib + bytes(pixel_bytes)
 
 
+def build_preview_frame_as_jpeg(
+    aligned_set: AlignedFrameSet,
+    camera_order: list[str],
+    sync_snapshot: dict[str, object],
+    max_width: int = 1600,
+    max_height: int = 900,
+    gap_px: int = 12,
+    header_px: int = 72,
+    jpeg_quality: int = 80,
+) -> bytes:
+    cv2 = _load_cv2_module()
+    np = _load_numpy_module()
+    preview_order = [camera_id for camera_id in camera_order if camera_id in aligned_set.frames]
+    if not preview_order:
+        raise ValueError("Aligned frame set does not contain previewable frames.")
+
+    first_frame = aligned_set.frames[preview_order[0]]
+    frame_height, frame_width = _frame_image_shape(first_frame)
+    layout = compute_grid_layout(
+        frame_width=frame_width,
+        frame_height=frame_height,
+        camera_count=len(preview_order),
+        max_width=max_width,
+        max_height=max_height,
+        gap_px=gap_px,
+        header_px=header_px,
+    )
+    canvas = np.zeros((layout.canvas_height, layout.canvas_width, 3), dtype=np.uint8)
+    canvas[:] = (9, 17, 26)
+
+    warnings_by_camera: dict[str, list[str]] = {}
+    for warning in sync_snapshot.get("warnings", []):
+        if not isinstance(warning, dict):
+            continue
+        camera_id = warning.get("camera_id")
+        code = warning.get("code")
+        if camera_id is None or code is None:
+            continue
+        warnings_by_camera.setdefault(str(camera_id), []).append(str(code))
+
+    summary = (
+        f"set={aligned_set.set_id}  ts={aligned_set.reference_timestamp_s:.3f}  "
+        f"skew={aligned_set.skew_ms:.3f}ms  cams={len(preview_order)}  "
+        f"aligned={int(sync_snapshot.get('aligned_sets', 0))}  dropped={int(sync_snapshot.get('dropped_frames', 0))}"
+    )
+    cv2.putText(canvas, summary, (gap_px, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (236, 242, 248), 2, cv2.LINE_AA)
+    cv2.putText(
+        canvas,
+        "preview path: latest-only mosaic",
+        (gap_px, 54),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (159, 177, 196),
+        1,
+        cv2.LINE_AA,
+    )
+
+    for index, camera_id in enumerate(preview_order):
+        row = index // layout.cols
+        col = index % layout.cols
+        x = gap_px + col * (layout.cell_width + gap_px)
+        y = header_px + gap_px + row * (layout.cell_height + gap_px)
+        frame = aligned_set.frames[camera_id]
+        image = _frame_to_ndarray(frame, np)
+        resized = cv2.resize(image, (layout.cell_width, layout.cell_height), interpolation=cv2.INTER_AREA)
+        canvas[y : y + layout.cell_height, x : x + layout.cell_width] = resized
+        cv2.rectangle(canvas, (x, y), (x + layout.cell_width, y + layout.cell_height), (83, 209, 201), 1)
+
+        offset_ms = aligned_set.offsets_ms.get(camera_id, 0.0)
+        warning_codes = ",".join(warnings_by_camera.get(camera_id, []))
+        label = f"{camera_id}  offset={offset_ms:.2f}ms"
+        if warning_codes:
+            label = f"{label}  warn={warning_codes}"
+        cv2.putText(canvas, label, (x + 8, y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 209, 102), 2, cv2.LINE_AA)
+
+    ok, encoded = cv2.imencode(".jpg", canvas, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
+    if not ok:
+        raise ValueError("OpenCV failed to encode preview mosaic.")
+    return encoded.tobytes()
+
+
+def _frame_image_shape(frame: Frame) -> tuple[int, int]:
+    if frame.image_data is None or frame.width is None or frame.height is None:
+        raise ValueError(f"{frame.camera_id} does not include image data.")
+    if frame.pixel_format != "bgr8":
+        raise ValueError(f"Unsupported pixel format: {frame.pixel_format}")
+    expected_size = frame.width * frame.height * 3
+    if len(frame.image_data) != expected_size:
+        raise ValueError(f"{frame.camera_id} image buffer size {len(frame.image_data)} does not match expected {expected_size}.")
+    return frame.height, frame.width
+
+
+def _frame_to_ndarray(frame: Frame, np):
+    frame_height, frame_width = _frame_image_shape(frame)
+    return np.frombuffer(frame.image_data, dtype=np.uint8).reshape((frame_height, frame_width, 3))
+
+
+def _load_cv2_module():
+    try:
+        import cv2
+    except ImportError as exc:  # pragma: no cover - depends on runtime environment
+        raise ValueError("Preview mosaic rendering requires cv2 in the stream service environment.") from exc
+    return cv2
+
+
+def _load_numpy_module():
+    try:
+        import numpy as np
+    except ImportError as exc:  # pragma: no cover - depends on runtime environment
+        raise ValueError("Preview mosaic rendering requires numpy in the stream service environment.") from exc
+    return np
+
+
 class AlignedSetRepository:
     def __init__(self, camera_ids: list[str], recent_sets: int) -> None:
         self._camera_ids = camera_ids
@@ -68,14 +182,39 @@ class AlignedSetRepository:
         self._last_publish_at: float | None = None
         self._published_sets = 0
         self._running = True
+        self._latest_preview_jpeg: bytes | None = None
+        self._latest_preview_headers: dict[str, str] = {}
+        self._last_preview_error: str | None = None
 
     def publish(self, aligned_set: AlignedFrameSet, sync_snapshot: dict[str, object], camera_snapshot: dict[str, object]) -> None:
+        preview_jpeg: bytes | None = None
+        preview_headers: dict[str, str] = {}
+        preview_error: str | None = None
+        try:
+            preview_jpeg = build_preview_frame_as_jpeg(aligned_set, self._camera_ids, sync_snapshot)
+            preview_headers = {
+                "X-SensorProto-Set-Id": str(aligned_set.set_id),
+                "X-SensorProto-Reference-Timestamp-S": f"{aligned_set.reference_timestamp_s:.6f}",
+                "X-SensorProto-Skew-Ms": f"{aligned_set.skew_ms:.6f}",
+                "X-SensorProto-Camera-Count": str(len(aligned_set.frames)),
+            }
+        except ValueError as exc:
+            preview_jpeg = None
+            preview_headers = {}
+            preview_error = str(exc)
+
         with self._lock:
             self._sets[aligned_set.set_id] = aligned_set
             while len(self._sets) > self._recent_sets:
                 self._sets.popitem(last=False)
             self._latest_sync = sync_snapshot
             self._latest_cameras = camera_snapshot
+            if preview_jpeg is not None:
+                self._latest_preview_jpeg = preview_jpeg
+                self._latest_preview_headers = preview_headers
+                self._last_preview_error = None
+            elif preview_error is not None:
+                self._last_preview_error = preview_error
             self._last_publish_at = time.time()
             self._published_sets += 1
 
@@ -111,6 +250,10 @@ class AlignedSetRepository:
                 "started_at_s": round(self._started_at, 3),
                 "last_publish_at_s": round(self._last_publish_at, 3) if self._last_publish_at is not None else None,
                 "last_error": self._last_error,
+                "preview": {
+                    "available": self._latest_preview_jpeg is not None,
+                    "last_error": self._last_preview_error,
+                },
                 "sync": self._latest_sync,
             }
 
@@ -123,6 +266,12 @@ class AlignedSetRepository:
             if frame is None:
                 raise KeyError(f"Unknown camera id {camera_id} in set {set_id}")
         return encode_bgr_frame_as_bmp(frame)
+
+    def get_latest_preview_jpeg(self) -> tuple[bytes, dict[str, str]]:
+        with self._lock:
+            if self._latest_preview_jpeg is None:
+                raise LookupError("No preview frame available yet.")
+            return self._latest_preview_jpeg, dict(self._latest_preview_headers)
 
 
 def build_dashboard_html(title: str, refresh_ms: int) -> str:
@@ -159,36 +308,22 @@ def build_dashboard_html(title: str, refresh_ms: int) -> str:
       font-size: 14px;
     }}
     main {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 14px;
       padding: 16px 24px 24px;
     }}
-    .card {{
+    .panel {{
       background: rgba(16, 32, 48, 0.9);
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 16px;
       overflow: hidden;
       box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
-    }}
-    .card header {{
-      padding: 12px 14px 8px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }}
-    .meta {{
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.4;
-      padding: 0 14px 12px;
+      padding: 14px;
     }}
     img {{
       display: block;
       width: 100%;
       background: #000;
-      aspect-ratio: 4 / 3;
       object-fit: contain;
+      border-radius: 12px;
     }}
     .pill {{
       color: var(--accent);
@@ -202,68 +337,27 @@ def build_dashboard_html(title: str, refresh_ms: int) -> str:
 <body>
   <header>
     <h1>{title}</h1>
-    <div id="summary">等待首个同步帧集...</div>
+    <div id="summary">等待首个 preview mosaic...</div>
   </header>
-  <main id="grid"></main>
+  <main>
+    <section class="panel">
+      <div class="pill">latest-only preview</div>
+      <img id="preview" alt="Latest preview mosaic">
+    </section>
+  </main>
   <script>
     const refreshMs = {refresh_ms};
-    const grid = document.getElementById("grid");
+    const preview = document.getElementById("preview");
     const summary = document.getElementById("summary");
-    let latestSetId = null;
-    const cards = new Map();
+    preview.addEventListener("load", () => {{
+      summary.textContent = `preview refreshed at ${{new Date().toLocaleTimeString()}}`;
+    }});
+    preview.addEventListener("error", () => {{
+      summary.textContent = "同步服务运行中，但尚未生成 preview。";
+    }});
 
-    function ensureCard(cameraId) {{
-      if (cards.has(cameraId)) {{
-        return cards.get(cameraId);
-      }}
-      const card = document.createElement("section");
-      card.className = "card";
-      card.innerHTML = `
-        <header>
-          <strong>${{cameraId}}</strong>
-          <span class="pill">等待数据</span>
-        </header>
-        <img alt="${{cameraId}}">
-        <div class="meta"></div>
-      `;
-      grid.appendChild(card);
-      cards.set(cameraId, card);
-      return card;
-    }}
-
-    async function refresh() {{
-      try {{
-        const response = await fetch("/api/latest-set", {{ cache: "no-store" }});
-        if (!response.ok) {{
-          summary.textContent = "同步服务运行中，但尚未产生对齐帧集。";
-          return;
-        }}
-        const payload = await response.json();
-        summary.textContent =
-          `set=${{payload.set_id}} | aligned_sets=${{payload.sync.aligned_sets}} | dropped=${{payload.sync.dropped_frames}} | skew=${{payload.skew_ms.toFixed(3)}}ms | warnings=${{payload.sync.warnings.length}}`;
-        if (latestSetId === payload.set_id) {{
-          return;
-        }}
-        latestSetId = payload.set_id;
-        for (const cameraId of payload.camera_order) {{
-          const frame = payload.frames[cameraId];
-          const card = ensureCard(cameraId);
-          const pill = card.querySelector(".pill");
-          const meta = card.querySelector(".meta");
-          const img = card.querySelector("img");
-          const warningCodes = payload.sync.warnings
-            .filter((item) => item.camera_id === cameraId)
-            .map((item) => item.code)
-            .join(", ");
-          pill.textContent = `offset=${{payload.offsets_ms[cameraId].toFixed(3)}}ms`;
-          pill.className = warningCodes ? "pill warn" : "pill";
-          meta.textContent =
-            `serial=${{frame.sensor_serial}} | frame=${{frame.frame_counter}} | seq=${{frame.sequence}} | ts=${{frame.device_timestamp_ms}} | domain=${{frame.timestamp_domain}}${{warningCodes ? " | warn=" + warningCodes : ""}}`;
-          img.src = `/api/sets/${{payload.set_id}}/frames/${{cameraId}}.bmp?ts=${{Date.now()}}`;
-        }}
-      }} catch (error) {{
-        summary.textContent = `获取同步数据失败: ${{error}}`;
-      }}
+    function refresh() {{
+      preview.src = `/api/preview.jpg?ts=${{Date.now()}}`;
     }}
 
     setInterval(refresh, refreshMs);
@@ -292,6 +386,14 @@ class StreamRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "No aligned frame set available yet."}, HTTPStatus.SERVICE_UNAVAILABLE)
                 return
             self._send_json(payload)
+            return
+        if path == "/api/preview.jpg":
+            try:
+                payload, headers = self.server.repository.get_latest_preview_jpeg()
+            except LookupError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_bytes(payload, "image/jpeg", extra_headers=headers)
             return
         if path.startswith("/api/sets/") and path.endswith(".bmp"):
             parts = path.strip("/").split("/")
@@ -325,11 +427,19 @@ class StreamRequestHandler(BaseHTTPRequestHandler):
     def _send_html(self, body: str) -> None:
         self._send_bytes(body.encode("utf-8"), "text/html; charset=utf-8")
 
-    def _send_bytes(self, payload: bytes, content_type: str, status: HTTPStatus = HTTPStatus.OK) -> None:
+    def _send_bytes(
+        self,
+        payload: bytes,
+        content_type: str,
+        status: HTTPStatus = HTTPStatus.OK,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Cache-Control", "no-store")
+        for key, value in (extra_headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(payload)
 

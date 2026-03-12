@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from sensor_proto.models import AlignedFrameSet, Frame
 from sensor_proto.stream_server import AlignedSetRepository, encode_bgr_frame_as_bmp
@@ -82,11 +83,12 @@ class StreamServiceTests(unittest.TestCase):
             offsets_ms={"cam-a": 0.0, "cam-b": 8.0},
         )
 
-        repository.publish(
-            aligned_set,
-            sync_snapshot={"aligned_sets": 1, "warnings": []},
-            camera_snapshot={"cam-a": {"processed": 1}, "cam-b": {"processed": 1}},
-        )
+        with patch("sensor_proto.stream_server.build_preview_frame_as_jpeg", return_value=b"preview-jpeg"):
+            repository.publish(
+                aligned_set,
+                sync_snapshot={"aligned_sets": 1, "warnings": []},
+                camera_snapshot={"cam-a": {"processed": 1}, "cam-b": {"processed": 1}},
+            )
 
         payload = repository.latest_payload()
 
@@ -96,6 +98,13 @@ class StreamServiceTests(unittest.TestCase):
         self.assertEqual(payload["camera_order"], ["cam-a", "cam-b"])
         self.assertEqual(payload["offsets_ms"]["cam-b"], 8.0)
         self.assertEqual(payload["frames"]["cam-a"]["sensor_serial"], "mock-a")
+
+        preview_payload, preview_headers = repository.get_latest_preview_jpeg()
+        self.assertEqual(preview_payload, b"preview-jpeg")
+        self.assertEqual(preview_headers["X-SensorProto-Set-Id"], "3")
+        self.assertEqual(preview_headers["X-SensorProto-Camera-Count"], "2")
+        self.assertTrue(repository.health_payload()["preview"]["available"])
+        self.assertIsNone(repository.health_payload()["preview"]["last_error"])
 
 
 if __name__ == "__main__":
