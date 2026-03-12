@@ -1,16 +1,34 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from sensor_proto.cameras.realsense_discovery import RealSenseDeviceInfo, canonicalize_realsense_model
-from sensor_proto.stream_main import build_realsense_stream_config_payload, prepare_stream_runtime_config
+from sensor_proto.stream_main import build_realsense_stream_config_payload, parse_args, prepare_stream_runtime_config
 
 
 class StreamAutoConfigTests(unittest.TestCase):
+    def test_parse_args_accepts_stop_after_aligned_sets(self) -> None:
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "stream_main.py",
+                "--config",
+                "configs/realsense-8cam-stream.json",
+                "--stop-after-aligned-sets",
+                "300",
+            ],
+        ):
+            args = parse_args()
+
+        self.assertEqual(args.config, "configs/realsense-8cam-stream.json")
+        self.assertEqual(args.stop_after_aligned_sets, 300)
+
     def test_canonicalize_realsense_model_normalizes_sdk_names(self) -> None:
         self.assertEqual(canonicalize_realsense_model("Intel RealSense D435I"), "realsense-d435i")
         self.assertEqual(canonicalize_realsense_model("Intel RealSense D435IF"), "realsense-d435if")

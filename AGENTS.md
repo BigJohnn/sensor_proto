@@ -34,6 +34,8 @@ Use these commands as the stable developer entry points:
 - `make stream-up` to start the hardware stream service with automatic camera detection and runtime config generation
 - `make stream-viewer` to open the host-side OpenCV multi-camera viewer
 - `make stream-shot` to fetch the latest aligned frame set and save per-camera PNGs
+- `make stream-record-10s` to record one LeRobot v3 episode from the currently connected RealSense cameras, stopping after the default target of 300 aligned frame sets
+- `make episode-rerun EPISODE=artifacts/lerobot/<episode_dir>` to visualize a recorded LeRobot episode on the host using rerun-sdk
 - `make stream-down` to stop the hardware stream service
 - `make stream-logs` to follow the hardware stream service logs
 - `docker compose -f docker/compose.yaml config` to validate compose config

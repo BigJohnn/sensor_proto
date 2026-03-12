@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 PYTEST_DISABLE_PLUGIN_AUTOLOAD ?= 1
 
-.PHONY: test mock-run stream-up stream-down stream-logs stream-viewer stream-shot
+.PHONY: test mock-run stream-up stream-down stream-logs stream-viewer stream-shot stream-record-10s episode-rerun
 
 test:
 	source $$HOME/.local/bin/env && UV_CACHE_DIR=/tmp/uv-cache PYTEST_DISABLE_PLUGIN_AUTOLOAD=$(PYTEST_DISABLE_PLUGIN_AUTOLOAD) PYTHONPATH=src uv run --no-project --python "$$(command -v python3)" python -m pytest
@@ -24,3 +24,10 @@ stream-viewer:
 
 stream-shot:
 	bash scripts/save_latest_frames.sh
+
+stream-record-10s:
+	bash scripts/record_stream_episode.sh 10
+
+episode-rerun:
+	@if [[ -z "$(EPISODE)" ]]; then echo "Usage: make episode-rerun EPISODE=artifacts/lerobot/<episode_dir>"; exit 1; fi
+	bash scripts/run_episode_rerun.sh "$(EPISODE)"

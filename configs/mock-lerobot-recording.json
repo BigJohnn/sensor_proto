@@ -1,0 +1,59 @@
+{
+  "duration_s": 0.0,
+  "queue_size": 32,
+  "processing_delay_ms": 0.0,
+  "sync": {
+    "enabled": true,
+    "strategy": "device-clock-soft-sync",
+    "tolerance_ms": 12.0,
+    "max_buffered_frames": 4,
+    "reference_camera_id": "rs-00",
+    "hardware_sync_mode": "disabled"
+  },
+  "stream": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "recent_sets": 4,
+    "client_refresh_ms": 300
+  },
+  "recording": {
+    "enabled": true,
+    "format": "lerobot_v3",
+    "root_dir": "artifacts/lerobot/mock-session",
+    "repo_id": "local/sensor-proto-mock",
+    "task": "synchronized-multi-camera-observation",
+    "robot_type": "camera-rig",
+    "fps": 30,
+    "use_videos": true
+  },
+  "cameras": [
+    {
+      "id": "rs-00",
+      "kind": "mock",
+      "model": "realsense-d435i",
+      "fps": 30,
+      "width": 320,
+      "height": 240,
+      "mock_payload_size": 230400,
+      "mock_jitter_ms": 1.0,
+      "mock_timestamp_offset_ms": 0.0,
+      "mock_sync_group": "rig-a",
+      "capture_image_data": true,
+      "seed": 101
+    },
+    {
+      "id": "rs-01",
+      "kind": "mock",
+      "model": "realsense-d455",
+      "fps": 30,
+      "width": 320,
+      "height": 240,
+      "mock_payload_size": 230400,
+      "mock_jitter_ms": 1.2,
+      "mock_timestamp_offset_ms": 3.0,
+      "mock_sync_group": "rig-a",
+      "capture_image_data": true,
+      "seed": 102
+    }
+  ]
+}

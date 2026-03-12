@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import signal
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,6 +10,7 @@ from typing import Any
 
 from sensor_proto.cameras.realsense_discovery import RealSenseDeviceInfo, discover_realsense_devices
 from sensor_proto.config import load_run_config, load_run_config_payload, write_run_config_payload
+from sensor_proto.recording import LeRobotRecorder
 from sensor_proto.stream_server import AlignedSetRepository, StreamHttpServer, build_dashboard_html
 from sensor_proto.streaming import SynchronizedStreamRunner
 
@@ -26,6 +28,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Expected number of connected RealSense cameras. Defaults to template camera count.",
+    )
+    parser.add_argument(
+        "--stop-after-aligned-sets",
+        type=int,
+        default=None,
+        help="Stop the stream after publishing this many aligned frame sets.",
     )
     return parser.parse_args()
 
@@ -45,12 +53,46 @@ def main() -> None:
         preview_max_height=config.stream.preview_max_height,
         preview_jpeg_quality=config.stream.preview_jpeg_quality,
     )
+    recorder = LeRobotRecorder(config) if config.recording.enabled else None
     stop_requested = threading.Event()
+    server: StreamHttpServer | None = None
+    aligned_set_count = 0
+
+    def request_shutdown(message: str, *, mark_error: bool = True) -> None:
+        print(f"Stopping stream: {message}", flush=True)
+        if mark_error:
+            repository.set_error(message)
+        stop_requested.set()
+        if server is not None:
+            server.shutdown()
+
+    def handle_aligned_set(aligned_set, sync_snapshot, camera_snapshot) -> None:
+        nonlocal aligned_set_count
+        if stop_requested.is_set():
+            return
+        repository.publish(aligned_set, sync_snapshot, camera_snapshot)
+        if recorder is not None:
+            try:
+                recorder.record(aligned_set)
+            except Exception as exc:
+                request_shutdown(f"recording: {exc}")
+                raise
+        aligned_set_count += 1
+        if args.stop_after_aligned_sets is not None and aligned_set_count >= args.stop_after_aligned_sets:
+            request_shutdown(
+                f"reached target aligned set count: {aligned_set_count}",
+                mark_error=False,
+            )
 
     runner = SynchronizedStreamRunner(
         config,
-        on_aligned_set=repository.publish,
-        on_error=repository.set_error,
+        on_aligned_set=handle_aligned_set,
+        on_error=request_shutdown,
+    )
+    server = StreamHttpServer(
+        (config.stream.host, config.stream.port),
+        repository,
+        build_dashboard_html(f"RealSense {len(config.cameras)}-Camera Sync Viewer", config.stream.client_refresh_ms),
     )
     capture_thread = threading.Thread(
         target=lambda: asyncio.run(runner.run_until_stopped(stop_requested)),
@@ -59,21 +101,25 @@ def main() -> None:
     )
     capture_thread.start()
 
-    server = StreamHttpServer(
-        (config.stream.host, config.stream.port),
-        repository,
-        build_dashboard_html(f"RealSense {len(config.cameras)}-Camera Sync Viewer", config.stream.client_refresh_ms),
-    )
+    previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+
+    def _handle_sigterm(_signum, _frame) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
     print(f"Serving synchronized stream on http://{config.stream.host}:{config.stream.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
         stop_requested.set()
         repository.stop()
         server.server_close()
         capture_thread.join(timeout=10)
+        if recorder is not None:
+            recorder.close()
 
 
 def prepare_stream_runtime_config(template_path: str, generated_config_path: str, expected_cameras: int | None = None) -> str:

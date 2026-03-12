@@ -49,6 +49,18 @@ class StreamConfig:
 
 
 @dataclass(slots=True)
+class RecordingConfig:
+    enabled: bool = False
+    format: str = "lerobot_v3"
+    root_dir: str | None = None
+    repo_id: str = "local/sensor-proto"
+    task: str = "synchronized-multi-camera-observation"
+    robot_type: str = "camera-rig"
+    fps: int | None = None
+    use_videos: bool = True
+
+
+@dataclass(slots=True)
 class RunConfig:
     cameras: list[CameraConfig]
     duration_s: float
@@ -57,6 +69,7 @@ class RunConfig:
     report_path: str | None = None
     sync: SyncConfig = field(default_factory=SyncConfig)
     stream: StreamConfig = field(default_factory=StreamConfig)
+    recording: RecordingConfig = field(default_factory=RecordingConfig)
 
 
 def load_run_config(path: str | Path) -> RunConfig:
@@ -66,6 +79,7 @@ def load_run_config(path: str | Path) -> RunConfig:
         raise ValueError("Run config must define at least one camera.")
     sync_raw = raw.get("sync", {})
     stream_raw = raw.get("stream", {})
+    recording_raw = raw.get("recording", {})
     return RunConfig(
         cameras=cameras,
         duration_s=float(raw.get("duration_s", 10.0)),
@@ -88,6 +102,16 @@ def load_run_config(path: str | Path) -> RunConfig:
             preview_max_width=int(stream_raw.get("preview_max_width", 1280)),
             preview_max_height=int(stream_raw.get("preview_max_height", 720)),
             preview_jpeg_quality=int(stream_raw.get("preview_jpeg_quality", 72)),
+        ),
+        recording=RecordingConfig(
+            enabled=bool(recording_raw.get("enabled", False)),
+            format=str(recording_raw.get("format", "lerobot_v3")),
+            root_dir=recording_raw.get("root_dir"),
+            repo_id=str(recording_raw.get("repo_id", "local/sensor-proto")),
+            task=str(recording_raw.get("task", "synchronized-multi-camera-observation")),
+            robot_type=str(recording_raw.get("robot_type", "camera-rig")),
+            fps=int(recording_raw["fps"]) if recording_raw.get("fps") is not None else None,
+            use_videos=bool(recording_raw.get("use_videos", True)),
         ),
     )
 
