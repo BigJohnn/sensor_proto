@@ -4,6 +4,9 @@
 
 当前仓库已将 [configs/realsense-8cam-session.json](/home/corenetic/Code/sensor_proto/configs/realsense-8cam-session.json) 作为 `8` 路正式采集配置，`sync.tolerance_ms` 定为 `45.0`，用于自由运行 RealSense `8` 机位的软同步对齐。
 
+当前阶段的优化排序另见：
+[realsense-stream-optimization-priority-2026-03-12.md](/home/corenetic/Code/sensor_proto/docs/realsense-stream-optimization-priority-2026-03-12.md)
+
 在此基础上，新增一条“同步后再转发”的运行路径，用于：
 
 - 在容器内完成 `8` 路采集与时间戳对齐
@@ -47,6 +50,7 @@
 - preview 路径改为服务端直接生成单张 mosaic `JPEG`
 - 该路径只追最新、允许覆盖旧帧，不承担同步数据分发职责
 - 因为 mosaic 在服务端编码，`sensor-stream` 容器需要提供 `numpy` 与 headless OpenCV
+- preview 相关参数支持通过 `stream.preview_max_width`、`stream.preview_max_height`、`stream.preview_jpeg_quality` 调优
 
 ### 3. 自动探测与配置生成
 
@@ -153,7 +157,7 @@ aligned = client.get_latest_aligned_set()
 - 基础单元测试
 
 待补齐：
-- preview 通道的进一步 profile 与质量参数调优
+- 基于长期运行数据的 sync / hardware 稳定性优化
 
 ## 工程判断
 
@@ -161,6 +165,22 @@ aligned = client.get_latest_aligned_set()
 
 - `data path`：`AlignedFrameSet` 元数据 + 单路 BMP，保留完整同步语义
 - `preview path`：服务端直接输出单张 preview mosaic，供人眼低延迟预览
+
+当前 `/api/health` 同时提供 preview 侧可观测性：
+
+- `preview.last_encode_ms`
+- `preview.avg_encode_ms`
+- `preview.max_encode_ms`
+- `preview.last_size_bytes`
+- `preview.publish_rate_hz`
+
+根据当前长时间运行观测：
+
+- preview 路径已稳定接近 `30Hz`
+- preview 编码成本不是主瓶颈
+- 剩余主要问题在 sync 窗口边缘运行和部分相机掉帧
+
+因此，下一步重点不再是继续压 preview，而是转向 sync / hardware 稳定性。
 
 若目标是让 host 侧算法代码直接消费同步帧集，则继续使用 Python client 的完整数据接口：
 
@@ -172,9 +192,9 @@ aligned = client.get_latest_aligned_set()
 
 下一步推荐工作：
 
-1. 对 `/api/preview.jpg` 做端到端 profile，量化 mosaic 编码耗时
-2. 明确 host 环境的 OpenCV 依赖安装方式
-3. 评估 CLI 是否需要增加连续轮询模式
+1. 继续跟踪 `sync.avg_skew_ms`、`sync.max_skew_ms`、`sync.incomplete_sets`
+2. 结合 USB 拓扑、供电和线材排查高掉帧机位
+3. 只有在后续数据重新证明 preview 仍受限时，再回到 preview / transport 优化
 
 ## 推荐命令
 

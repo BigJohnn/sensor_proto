@@ -41,6 +41,9 @@ def main() -> None:
     repository = AlignedSetRepository(
         camera_ids=[camera.id for camera in config.cameras],
         recent_sets=config.stream.recent_sets,
+        preview_max_width=config.stream.preview_max_width,
+        preview_max_height=config.stream.preview_max_height,
+        preview_jpeg_quality=config.stream.preview_jpeg_quality,
     )
     stop_requested = threading.Event()
 
@@ -132,15 +135,18 @@ def build_realsense_stream_config_payload(
     generated_payload = dict(template_payload)
     generated_payload["duration_s"] = 0.0
     generated_payload["cameras"] = generated_cameras
-    generated_payload.setdefault(
-        "stream",
-        {
-            "host": "0.0.0.0",
-            "port": 8787,
-            "recent_sets": 4,
-            "client_refresh_ms": 300,
-        },
-    )
+    stream = {
+        "host": "0.0.0.0",
+        "port": 8787,
+        "recent_sets": 4,
+        "client_refresh_ms": 300,
+        "preview_max_width": 1280,
+        "preview_max_height": 720,
+        "preview_jpeg_quality": 72,
+    }
+    if isinstance(generated_payload.get("stream"), dict):
+        stream.update(generated_payload["stream"])
+    generated_payload["stream"] = stream
 
     sync = dict(generated_payload.get("sync", {}))
     sync["reference_camera_id"] = generated_cameras[0]["id"]

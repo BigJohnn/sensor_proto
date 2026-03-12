@@ -5,6 +5,7 @@ import struct
 import threading
 import time
 from collections import OrderedDict
+from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -170,9 +171,19 @@ def _load_numpy_module():
 
 
 class AlignedSetRepository:
-    def __init__(self, camera_ids: list[str], recent_sets: int) -> None:
+    def __init__(
+        self,
+        camera_ids: list[str],
+        recent_sets: int,
+        preview_max_width: int = 1280,
+        preview_max_height: int = 720,
+        preview_jpeg_quality: int = 72,
+    ) -> None:
         self._camera_ids = camera_ids
         self._recent_sets = max(recent_sets, 1)
+        self._preview_max_width = max(preview_max_width, 320)
+        self._preview_max_height = max(preview_max_height, 240)
+        self._preview_jpeg_quality = min(max(preview_jpeg_quality, 30), 95)
         self._lock = threading.Lock()
         self._sets: OrderedDict[int, AlignedFrameSet] = OrderedDict()
         self._latest_sync: dict[str, Any] = {}
@@ -185,13 +196,29 @@ class AlignedSetRepository:
         self._latest_preview_jpeg: bytes | None = None
         self._latest_preview_headers: dict[str, str] = {}
         self._last_preview_error: str | None = None
+        self._preview_encoded_frames = 0
+        self._preview_encode_total_ms = 0.0
+        self._preview_encode_max_ms = 0.0
+        self._preview_last_encode_ms: float | None = None
+        self._preview_last_size_bytes: int | None = None
+        self._publish_timestamps_s: deque[float] = deque()
 
     def publish(self, aligned_set: AlignedFrameSet, sync_snapshot: dict[str, object], camera_snapshot: dict[str, object]) -> None:
         preview_jpeg: bytes | None = None
         preview_headers: dict[str, str] = {}
         preview_error: str | None = None
+        preview_encode_ms: float | None = None
         try:
-            preview_jpeg = build_preview_frame_as_jpeg(aligned_set, self._camera_ids, sync_snapshot)
+            preview_started_at = time.perf_counter()
+            preview_jpeg = build_preview_frame_as_jpeg(
+                aligned_set,
+                self._camera_ids,
+                sync_snapshot,
+                max_width=self._preview_max_width,
+                max_height=self._preview_max_height,
+                jpeg_quality=self._preview_jpeg_quality,
+            )
+            preview_encode_ms = (time.perf_counter() - preview_started_at) * 1000.0
             preview_headers = {
                 "X-SensorProto-Set-Id": str(aligned_set.set_id),
                 "X-SensorProto-Reference-Timestamp-S": f"{aligned_set.reference_timestamp_s:.6f}",
@@ -204,6 +231,7 @@ class AlignedSetRepository:
             preview_error = str(exc)
 
         with self._lock:
+            now_s = time.time()
             self._sets[aligned_set.set_id] = aligned_set
             while len(self._sets) > self._recent_sets:
                 self._sets.popitem(last=False)
@@ -213,10 +241,18 @@ class AlignedSetRepository:
                 self._latest_preview_jpeg = preview_jpeg
                 self._latest_preview_headers = preview_headers
                 self._last_preview_error = None
+                self._preview_encoded_frames += 1
+                if preview_encode_ms is not None:
+                    self._preview_last_encode_ms = preview_encode_ms
+                    self._preview_encode_total_ms += preview_encode_ms
+                    self._preview_encode_max_ms = max(self._preview_encode_max_ms, preview_encode_ms)
+                self._preview_last_size_bytes = len(preview_jpeg)
             elif preview_error is not None:
                 self._last_preview_error = preview_error
-            self._last_publish_at = time.time()
+            self._last_publish_at = now_s
             self._published_sets += 1
+            self._publish_timestamps_s.append(now_s)
+            self._trim_publish_history(now_s)
 
     def set_error(self, message: str) -> None:
         with self._lock:
@@ -242,6 +278,8 @@ class AlignedSetRepository:
     def health_payload(self) -> dict[str, object]:
         with self._lock:
             latest_set_id = next(reversed(self._sets.keys())) if self._sets else None
+            now_s = time.time()
+            self._trim_publish_history(now_s)
             return {
                 "running": self._running,
                 "camera_ids": self._camera_ids,
@@ -253,6 +291,19 @@ class AlignedSetRepository:
                 "preview": {
                     "available": self._latest_preview_jpeg is not None,
                     "last_error": self._last_preview_error,
+                    "max_width": self._preview_max_width,
+                    "max_height": self._preview_max_height,
+                    "jpeg_quality": self._preview_jpeg_quality,
+                    "last_size_bytes": self._preview_last_size_bytes,
+                    "encoded_frames": self._preview_encoded_frames,
+                    "last_encode_ms": round(self._preview_last_encode_ms, 3) if self._preview_last_encode_ms is not None else None,
+                    "avg_encode_ms": (
+                        round(self._preview_encode_total_ms / self._preview_encoded_frames, 3)
+                        if self._preview_encoded_frames
+                        else None
+                    ),
+                    "max_encode_ms": round(self._preview_encode_max_ms, 3) if self._preview_encoded_frames else None,
+                    "publish_rate_hz": round(self._compute_publish_rate_hz(now_s), 3),
                 },
                 "sync": self._latest_sync,
             }
@@ -272,6 +323,18 @@ class AlignedSetRepository:
             if self._latest_preview_jpeg is None:
                 raise LookupError("No preview frame available yet.")
             return self._latest_preview_jpeg, dict(self._latest_preview_headers)
+
+    def _trim_publish_history(self, now_s: float) -> None:
+        window_s = 5.0
+        while self._publish_timestamps_s and now_s - self._publish_timestamps_s[0] > window_s:
+            self._publish_timestamps_s.popleft()
+
+    def _compute_publish_rate_hz(self, now_s: float) -> float:
+        if len(self._publish_timestamps_s) < 2:
+            return 0.0
+        oldest_s = self._publish_timestamps_s[0]
+        span_s = max(now_s - oldest_s, 0.001)
+        return len(self._publish_timestamps_s) / span_s
 
 
 def build_dashboard_html(title: str, refresh_ms: int) -> str:

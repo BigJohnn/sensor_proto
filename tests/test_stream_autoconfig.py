@@ -19,6 +19,10 @@ class StreamAutoConfigTests(unittest.TestCase):
         template_payload = {
             "duration_s": 30.0,
             "queue_size": 320,
+            "stream": {
+                "port": 9898,
+                "client_refresh_ms": 180,
+            },
             "sync": {
                 "enabled": True,
                 "tolerance_ms": 45.0,
@@ -56,7 +60,11 @@ class StreamAutoConfigTests(unittest.TestCase):
         self.assertEqual(payload["duration_s"], 0.0)
         self.assertEqual(payload["queue_size"], 320)
         self.assertEqual(payload["sync"]["reference_camera_id"], "rs-00")
-        self.assertEqual(payload["stream"]["port"], 8787)
+        self.assertEqual(payload["stream"]["port"], 9898)
+        self.assertEqual(payload["stream"]["client_refresh_ms"], 180)
+        self.assertEqual(payload["stream"]["preview_max_width"], 1280)
+        self.assertEqual(payload["stream"]["preview_max_height"], 720)
+        self.assertEqual(payload["stream"]["preview_jpeg_quality"], 72)
         self.assertEqual(len(payload["cameras"]), 2)
         self.assertEqual(payload["cameras"][0]["serial"], "111")
         self.assertEqual(payload["cameras"][1]["model"], "realsense-d435if")

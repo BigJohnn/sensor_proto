@@ -43,6 +43,9 @@ class StreamConfig:
     port: int = 8787
     recent_sets: int = 4
     client_refresh_ms: int = 250
+    preview_max_width: int = 1280
+    preview_max_height: int = 720
+    preview_jpeg_quality: int = 72
 
 
 @dataclass(slots=True)
@@ -82,6 +85,9 @@ def load_run_config(path: str | Path) -> RunConfig:
             port=int(stream_raw.get("port", 8787)),
             recent_sets=int(stream_raw.get("recent_sets", 4)),
             client_refresh_ms=int(stream_raw.get("client_refresh_ms", 250)),
+            preview_max_width=int(stream_raw.get("preview_max_width", 1280)),
+            preview_max_height=int(stream_raw.get("preview_max_height", 720)),
+            preview_jpeg_quality=int(stream_raw.get("preview_jpeg_quality", 72)),
         ),
     )
 

@@ -103,8 +103,15 @@ class StreamServiceTests(unittest.TestCase):
         self.assertEqual(preview_payload, b"preview-jpeg")
         self.assertEqual(preview_headers["X-SensorProto-Set-Id"], "3")
         self.assertEqual(preview_headers["X-SensorProto-Camera-Count"], "2")
-        self.assertTrue(repository.health_payload()["preview"]["available"])
-        self.assertIsNone(repository.health_payload()["preview"]["last_error"])
+        preview_health = repository.health_payload()["preview"]
+        self.assertTrue(preview_health["available"])
+        self.assertIsNone(preview_health["last_error"])
+        self.assertEqual(preview_health["max_width"], 1280)
+        self.assertEqual(preview_health["max_height"], 720)
+        self.assertEqual(preview_health["jpeg_quality"], 72)
+        self.assertEqual(preview_health["last_size_bytes"], len(b"preview-jpeg"))
+        self.assertEqual(preview_health["encoded_frames"], 1)
+        self.assertEqual(preview_health["publish_rate_hz"], 0.0)
 
 
 if __name__ == "__main__":

@@ -114,6 +114,22 @@ make stream-shot
 - `cameras`
 - `device_inventory`
 
+### 5. 想看 preview 当前是否是编码瓶颈
+
+直接查看 health：
+
+```bash
+curl -s http://127.0.0.1:8787/api/health | python3 -m json.tool
+```
+
+重点看：
+
+- `preview.last_encode_ms`
+- `preview.avg_encode_ms`
+- `preview.max_encode_ms`
+- `preview.last_size_bytes`
+- `preview.publish_rate_hz`
+
 ## 推荐做法
 
 - 日常使用优先记住 `make stream-up` 和 `make stream-viewer`
