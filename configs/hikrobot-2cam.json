@@ -1,0 +1,22 @@
+{
+  "cameras": [
+    {
+      "id": "hik-00",
+      "kind": "hikrobot",
+      "model": "mv-cs016-10uc",
+      "serial": "DA5404769",
+      "fps": 30,
+      "width": 1440,
+      "height": 1080
+    },
+    {
+      "id": "hik-01",
+      "kind": "hikrobot",
+      "model": "mv-cs016-10uc",
+      "serial": "DA5404760",
+      "fps": 30,
+      "width": 1440,
+      "height": 1080
+    }
+  ]
+}
