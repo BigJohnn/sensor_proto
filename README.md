@@ -10,6 +10,13 @@ RealSense 多相机同步采集、推流与 host 侧可视化工具集。
 - host 侧可用 OpenCV 实时查看
 - host 侧代码可直接拿到同步后的 `frames, timestamp`
 
+下一阶段的数据面迁移约束已经冻结在
+[docs/zmq-transport-contract.md](/home/corenetic/Code/sensor_proto/docs/zmq-transport-contract.md)：
+
+- HTTP 继续承担 control-plane 和 preview
+- ZMQ multipart 作为后续 aligned-set data-plane
+- 迁移期间 `/api/latest-set` 仅保留兼容语义，不再作为长期目标
+
 ## 最常用命令
 
 进入仓库：

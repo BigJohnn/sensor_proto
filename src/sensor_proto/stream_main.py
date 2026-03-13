@@ -13,6 +13,7 @@ from sensor_proto.config import load_run_config, load_run_config_payload, write_
 from sensor_proto.recording import RecordingSink
 from sensor_proto.stream_server import AlignedSetRepository, StreamHttpServer, build_dashboard_html
 from sensor_proto.streaming import SynchronizedStreamRunner
+from sensor_proto.transport import AlignedSetEvent, CompositeAlignedSetSink, RecordingAlignedSetSink, RepositoryAlignedSetSink
 
 
 def parse_args() -> argparse.Namespace:
@@ -54,9 +55,13 @@ def main() -> None:
         preview_jpeg_quality=config.stream.preview_jpeg_quality,
     )
     recording_sink = RecordingSink.from_config(config) if config.recording.enabled else None
-    repository.set_recording_status(
-        recording_sink.status().as_dict() if recording_sink is not None else RecordingSink.disabled().as_dict()
+    repository_sink = RepositoryAlignedSetSink(repository)
+    recording_publish_sink = RecordingAlignedSetSink(repository, recording_sink) if recording_sink is not None else None
+    aligned_set_sink = CompositeAlignedSetSink(
+        [repository_sink, *([recording_publish_sink] if recording_publish_sink is not None else [])]
     )
+    if recording_sink is None:
+        repository.set_recording_status(RecordingSink.disabled().as_dict())
     stop_requested = threading.Event()
     server: StreamHttpServer | None = None
     aligned_set_count = 0
@@ -74,12 +79,16 @@ def main() -> None:
         nonlocal aligned_set_count, recording_failure_reported
         if stop_requested.is_set():
             return
-        repository.publish(aligned_set, sync_snapshot, camera_snapshot)
-        if recording_sink is not None:
-            accepted = recording_sink.submit(aligned_set)
-            status = recording_sink.status()
-            repository.set_recording_status(status.as_dict())
-            if not accepted and not recording_failure_reported:
+        aligned_set_sink.publish(
+            AlignedSetEvent(
+                aligned_set=aligned_set,
+                sync_snapshot=sync_snapshot,
+                camera_snapshot=camera_snapshot,
+            )
+        )
+        if recording_publish_sink is not None:
+            status = recording_publish_sink.last_status
+            if recording_publish_sink.last_submit_accepted is False and not recording_failure_reported:
                 if status.last_error is not None:
                     print(f"Recording degraded: {status.last_error}", flush=True)
                 recording_failure_reported = True
