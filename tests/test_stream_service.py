@@ -134,6 +134,35 @@ class StreamServiceTests(unittest.TestCase):
         self.assertEqual(recording_health["queue_size"], 1)
         self.assertEqual(recording_health["queue_high_watermark"], 4)
         self.assertEqual(recording_health["written_sets"], 2)
+        transport_health = repository.health_payload()["transport"]
+        self.assertFalse(transport_health["enabled"])
+        self.assertIsNone(transport_health["kind"])
+
+    def test_repository_exposes_transport_health_payload(self) -> None:
+        repository = AlignedSetRepository(camera_ids=["cam-a"], recent_sets=1)
+        repository.set_transport_status(
+            {
+                "enabled": True,
+                "kind": "zmq",
+                "active": True,
+                "failed": False,
+                "backpressure_strategy": "latest_only_drop_oldest",
+                "queue_maxsize": 1,
+                "queue_size": 0,
+                "submitted_sets": 7,
+                "published_sets": 6,
+                "dropped_sets": 1,
+                "would_block_events": 1,
+                "last_error": None,
+            }
+        )
+
+        payload = repository.health_payload()["transport"]
+
+        self.assertTrue(payload["enabled"])
+        self.assertEqual(payload["kind"], "zmq")
+        self.assertEqual(payload["submitted_sets"], 7)
+        self.assertEqual(payload["dropped_sets"], 1)
 
 
 if __name__ == "__main__":

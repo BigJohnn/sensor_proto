@@ -11,9 +11,8 @@ from typing import Any
 from sensor_proto.cameras.realsense_discovery import RealSenseDeviceInfo, discover_realsense_devices
 from sensor_proto.config import load_run_config, load_run_config_payload, write_run_config_payload
 from sensor_proto.recording import RecordingSink
-from sensor_proto.stream_server import AlignedSetRepository, StreamHttpServer, build_dashboard_html
 from sensor_proto.streaming import SynchronizedStreamRunner
-from sensor_proto.transport import AlignedSetEvent, CompositeAlignedSetSink, RecordingAlignedSetSink, RepositoryAlignedSetSink
+from sensor_proto.transport import AlignedSetEvent, CompositeAlignedSetSink, ZmqAlignedSetPublisher, ZmqAlignedSetSink, ZmqTransportConfig, build_http_stream_runtime
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,33 +46,70 @@ def main() -> None:
         expected_cameras=args.expected_cameras,
     )
     config = load_run_config(runtime_config_path)
-    repository = AlignedSetRepository(
-        camera_ids=[camera.id for camera in config.cameras],
-        recent_sets=config.stream.recent_sets,
-        preview_max_width=config.stream.preview_max_width,
-        preview_max_height=config.stream.preview_max_height,
-        preview_jpeg_quality=config.stream.preview_jpeg_quality,
-    )
     recording_sink = RecordingSink.from_config(config) if config.recording.enabled else None
-    repository_sink = RepositoryAlignedSetSink(repository)
-    recording_publish_sink = RecordingAlignedSetSink(repository, recording_sink) if recording_sink is not None else None
-    aligned_set_sink = CompositeAlignedSetSink(
-        [repository_sink, *([recording_publish_sink] if recording_publish_sink is not None else [])]
-    )
-    if recording_sink is None:
-        repository.set_recording_status(RecordingSink.disabled().as_dict())
+    http_runtime = build_http_stream_runtime(config, recording_sink)
+    repository = http_runtime.repository
+    server = http_runtime.server
+    recording_publish_sink = http_runtime.recording_publish_sink
     stop_requested = threading.Event()
-    server: StreamHttpServer | None = None
     aligned_set_count = 0
     recording_failure_reported = False
+    zmq_publish_sink: ZmqAlignedSetSink | None = None
 
     def request_shutdown(message: str, *, mark_error: bool = True) -> None:
         print(f"Stopping stream: {message}", flush=True)
         if mark_error:
             repository.set_error(message)
         stop_requested.set()
-        if server is not None:
-            server.shutdown()
+        server.shutdown()
+
+    aligned_set_sinks = [http_runtime.aligned_set_sink]
+    if config.transport.enabled:
+        zmq_publish_sink = ZmqAlignedSetSink(
+            ZmqAlignedSetPublisher(
+                ZmqTransportConfig(
+                    bind_host=config.transport.bind_host,
+                    port=config.transport.port,
+                    topic=config.transport.topic,
+                    jpeg_quality=config.transport.jpeg_quality,
+                    max_queue=config.transport.max_queue,
+                    backpressure_strategy=config.transport.backpressure_strategy,
+                )
+            ),
+            camera_order=[camera.id for camera in config.cameras],
+            max_queue=config.transport.max_queue,
+            backpressure_strategy=config.transport.backpressure_strategy,
+            on_error=request_shutdown,
+            on_status=lambda payload: repository.set_transport_status(
+                {
+                    "kind": "zmq",
+                    "port": config.transport.port,
+                    "topic": config.transport.topic,
+                    **payload,
+                }
+            ),
+        )
+        aligned_set_sinks.append(zmq_publish_sink)
+    else:
+        repository.set_transport_status(
+            {
+                "enabled": False,
+                "kind": None,
+                "port": None,
+                "topic": None,
+                "active": False,
+                "failed": False,
+                "backpressure_strategy": None,
+                "queue_maxsize": None,
+                "queue_size": 0,
+                "submitted_sets": 0,
+                "published_sets": 0,
+                "dropped_sets": 0,
+                "would_block_events": 0,
+                "last_error": None,
+            }
+        )
+    aligned_set_sink = CompositeAlignedSetSink(aligned_set_sinks)
 
     def handle_aligned_set(aligned_set, sync_snapshot, camera_snapshot) -> None:
         nonlocal aligned_set_count, recording_failure_reported
@@ -104,11 +140,6 @@ def main() -> None:
         on_aligned_set=handle_aligned_set,
         on_error=request_shutdown,
     )
-    server = StreamHttpServer(
-        (config.stream.host, config.stream.port),
-        repository,
-        build_dashboard_html(f"RealSense {len(config.cameras)}-Camera Sync Viewer", config.stream.client_refresh_ms),
-    )
     capture_thread = threading.Thread(
         target=lambda: asyncio.run(runner.run_until_stopped(stop_requested)),
         name="sync-stream-capture",
@@ -130,6 +161,8 @@ def main() -> None:
     finally:
         signal.signal(signal.SIGTERM, previous_sigterm_handler)
         stop_requested.set()
+        if zmq_publish_sink is not None:
+            zmq_publish_sink.close()
         repository.stop()
         server.server_close()
         capture_thread.join(timeout=10)
@@ -142,7 +175,7 @@ def main() -> None:
 
 def close_recording_sink(
     recording_sink: RecordingSink | None,
-    repository: AlignedSetRepository,
+    repository,
 ):
     if recording_sink is None:
         return None
@@ -223,6 +256,20 @@ def build_realsense_stream_config_payload(
     if isinstance(generated_payload.get("stream"), dict):
         stream.update(generated_payload["stream"])
     generated_payload["stream"] = stream
+
+    transport = {
+        "enabled": False,
+        "kind": "zmq",
+        "bind_host": "0.0.0.0",
+        "port": 5555,
+        "topic": "",
+        "jpeg_quality": 80,
+        "max_queue": 1,
+        "backpressure_strategy": "latest_only_drop_oldest",
+    }
+    if isinstance(generated_payload.get("transport"), dict):
+        transport.update(generated_payload["transport"])
+    generated_payload["transport"] = transport
 
     sync = dict(generated_payload.get("sync", {}))
     sync["reference_camera_id"] = generated_cameras[0]["id"]

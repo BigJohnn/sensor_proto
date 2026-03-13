@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from sensor_proto.stream_viewer import (
     build_stalled_message,
     compute_grid_dimensions,
     compute_grid_layout,
     compute_stalled_duration_s,
+    resolve_viewer_transport_mode,
 )
 
 
@@ -43,6 +45,32 @@ class StreamViewerTests(unittest.TestCase):
 
     def test_build_stalled_message_includes_set_id_when_available(self) -> None:
         self.assertEqual(build_stalled_message(42, 2.4), "stream stalled for 2.4s on set=42")
+
+    def test_resolve_viewer_transport_mode_auto_prefers_zmq(self) -> None:
+        with patch("sensor_proto.stream_viewer.AlignedStreamClient") as http_client_cls:
+            http_client = http_client_cls.return_value
+            http_client.get_health.return_value = {"transport": {"enabled": True, "kind": "zmq", "port": 5555}}
+
+            mode, endpoint = resolve_viewer_transport_mode(
+                base_url="http://127.0.0.1:8787",
+                timeout_s=2.0,
+                transport="auto",
+                zmq_endpoint=None,
+            )
+
+        self.assertEqual(mode, "zmq")
+        self.assertEqual(endpoint, "tcp://127.0.0.1:5555")
+
+    def test_resolve_viewer_transport_mode_http_keeps_preview_path(self) -> None:
+        mode, endpoint = resolve_viewer_transport_mode(
+            base_url="http://127.0.0.1:8787",
+            timeout_s=2.0,
+            transport="http",
+            zmq_endpoint=None,
+        )
+
+        self.assertEqual(mode, "http")
+        self.assertIsNone(endpoint)
 
 
 if __name__ == "__main__":

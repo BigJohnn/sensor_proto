@@ -4,10 +4,34 @@ import json
 from dataclasses import dataclass
 from typing import Any
 from urllib import error, parse, request
+from urllib.parse import urlparse
+
+from sensor_proto.transport.zmq import decode_aligned_set_multipart
 
 
 class StreamClientError(RuntimeError):
     pass
+
+
+def resolve_zmq_endpoint(
+    base_url: str,
+    health_payload: dict[str, Any],
+    *,
+    explicit_endpoint: str | None = None,
+) -> str:
+    if explicit_endpoint:
+        return explicit_endpoint
+    transport = health_payload.get("transport")
+    if not isinstance(transport, dict) or not transport.get("enabled") or transport.get("kind") != "zmq":
+        raise StreamClientError("Stream service health does not advertise an enabled ZMQ transport.")
+    port = transport.get("port")
+    if port is None:
+        raise StreamClientError("Stream service health is missing transport.port for ZMQ discovery.")
+    parsed = urlparse(base_url)
+    host = parsed.hostname
+    if not host:
+        raise StreamClientError(f"Could not determine host from base URL: {base_url}")
+    return f"tcp://{host}:{int(port)}"
 
 
 @dataclass(slots=True)
@@ -126,3 +150,103 @@ class AlignedStreamClient:
         if value is None:
             raise StreamClientError(f"Stream service response is missing required header: {name}")
         return float(value)
+
+
+class ZmqAlignedStreamClient:
+    def __init__(
+        self,
+        endpoint: str,
+        *,
+        timeout_ms: int = 5000,
+        zmq_module=None,
+    ) -> None:
+        self._endpoint = endpoint
+        self._timeout_ms = timeout_ms
+        self._zmq_module = zmq_module
+        self._context = None
+        self._socket = None
+
+    def open(self) -> None:
+        if self._socket is not None:
+            return
+        zmq = self._zmq_module or self._load_zmq_module()
+        self._context = zmq.Context.instance()
+        self._socket = self._context.socket(zmq.SUB)
+        self._socket.setsockopt_string(zmq.SUBSCRIBE, "")
+        self._socket.connect(self._endpoint)
+
+    def close(self) -> None:
+        if self._socket is not None:
+            self._socket.close(linger=0)
+            self._socket = None
+        self._context = None
+
+    def recv_aligned_set(self, timeout_ms: int | None = None) -> AlignedFrameBundle:
+        multipart = self._recv_multipart(timeout_ms=timeout_ms)
+        decoded = decode_aligned_set_multipart(
+            multipart,
+            image_decoder=lambda payload, metadata: AlignedStreamClient._decode_image(payload),
+        )
+        camera_order = list(decoded.envelope["camera_order"])
+        frames = {
+            str(camera.metadata["camera_id"]): camera.decoded_image
+            for camera in decoded.cameras
+        }
+        offsets_ms = {
+            str(camera.metadata["camera_id"]): float(camera.metadata["offset_ms"])
+            for camera in decoded.cameras
+        }
+        device_timestamps_ms = {
+            str(camera.metadata["camera_id"]): (
+                float(camera.metadata["device_timestamp_ms"])
+                if camera.metadata.get("device_timestamp_ms") is not None
+                else None
+            )
+            for camera in decoded.cameras
+        }
+        return AlignedFrameBundle(
+            set_id=int(decoded.envelope["set_id"]),
+            timestamp=float(decoded.envelope["reference_timestamp_s"]),
+            frames=frames,
+            offsets_ms=offsets_ms,
+            device_timestamps_ms=device_timestamps_ms,
+            skew_ms=float(decoded.envelope["skew_ms"]),
+            camera_order=camera_order,
+            raw_payload={
+                "envelope": decoded.envelope,
+                "cameras": [camera.metadata for camera in decoded.cameras],
+            },
+        )
+
+    def get_next_aligned_set(self, timeout_ms: int | None = None) -> AlignedFrameBundle:
+        return self.recv_aligned_set(timeout_ms=timeout_ms)
+
+    def recv_aligned_frames(self, timeout_ms: int | None = None) -> tuple[dict[str, Any], float]:
+        aligned = self.recv_aligned_set(timeout_ms=timeout_ms)
+        return aligned.frames, aligned.timestamp
+
+    def _recv_multipart(self, timeout_ms: int | None = None) -> list[bytes]:
+        if self._socket is None:
+            self.open()
+        assert self._socket is not None
+        zmq = self._zmq_module or self._load_zmq_module()
+        effective_timeout_ms = self._timeout_ms if timeout_ms is None else int(timeout_ms)
+        if hasattr(self._socket, "setsockopt") and hasattr(zmq, "RCVTIMEO"):
+            self._socket.setsockopt(zmq.RCVTIMEO, effective_timeout_ms)
+        try:
+            return self._socket.recv_multipart()
+        except Exception as exc:
+            again_type = getattr(zmq, "Again", None)
+            if again_type is not None and isinstance(exc, again_type):
+                raise StreamClientError(
+                    f"Timed out waiting for aligned-set multipart message from {self._endpoint} after {effective_timeout_ms}ms."
+                ) from exc
+            raise StreamClientError(f"Failed to receive ZMQ aligned-set message from {self._endpoint}: {exc}") from exc
+
+    @staticmethod
+    def _load_zmq_module():
+        try:
+            import zmq
+        except ImportError as exc:  # pragma: no cover - depends on host environment
+            raise StreamClientError("ZmqAlignedStreamClient requires the `pyzmq` package on the host environment.") from exc
+        return zmq

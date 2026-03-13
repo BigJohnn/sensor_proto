@@ -7,6 +7,7 @@ name = "sensor-proto"
 version = "0.1.0"
 description = "Multi-camera stream harness for mock and hardware validation."
 requires-python = ">=3.10"
+dependencies = ["pyzmq>=26,<28"]
 
 [project.optional-dependencies]
 recording = ["lerobot==0.5.0; python_version >= '3.12'"]

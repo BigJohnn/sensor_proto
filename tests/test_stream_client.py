@@ -4,7 +4,7 @@ import urllib.error
 import unittest
 from unittest.mock import patch
 
-from sensor_proto.stream_client import AlignedStreamClient, StreamClientError
+from sensor_proto.stream_client import AlignedStreamClient, StreamClientError, ZmqAlignedStreamClient
 
 
 class StreamClientTests(unittest.TestCase):
@@ -82,6 +82,126 @@ class StreamClientTests(unittest.TestCase):
         self.assertEqual(preview.skew_ms, 9.25)
         self.assertEqual(preview.camera_count, 8)
         self.assertEqual(preview.frame, "preview-frame")
+
+    def test_zmq_client_receives_aligned_set(self) -> None:
+        class _FakeSocket:
+            def __init__(self) -> None:
+                self.connected = []
+                self.timeouts = []
+
+            def setsockopt_string(self, option, value) -> None:
+                self.subscription = (option, value)
+
+            def setsockopt(self, option, value) -> None:
+                self.timeouts.append((option, value))
+
+            def connect(self, endpoint: str) -> None:
+                self.connected.append(endpoint)
+
+            def recv_multipart(self):
+                return [
+                    b'{"protocol":"sensor_proto.aligned_set","protocol_version":1,"set_id":9,"reference_camera_id":"rs-00","reference_timestamp_s":12.5,"skew_ms":1.25,"camera_count":1,"camera_order":["rs-00"]}',
+                    b'{"camera_id":"rs-00","device_timestamp_ms":1000.0,"offset_ms":0.0,"width":1,"height":1,"pixel_format":"bgr8","payload_encoding":"jpeg","payload_size_bytes":4}',
+                    b"jpeg",
+                ]
+
+            def close(self, linger: int = 0) -> None:
+                self.closed = linger
+
+        class _FakeContext:
+            def __init__(self, socket) -> None:
+                self._socket = socket
+
+            def socket(self, socket_type):
+                self.socket_type = socket_type
+                return self._socket
+
+        class _FakeContextFactory:
+            def __init__(self, context) -> None:
+                self._context = context
+
+            def instance(self):
+                return self._context
+
+        class _FakeZmq:
+            SUB = 2
+            SUBSCRIBE = 3
+            RCVTIMEO = 4
+
+            class Again(Exception):
+                pass
+
+            def __init__(self, context) -> None:
+                self.Context = _FakeContextFactory(context)
+
+        fake_socket = _FakeSocket()
+        fake_context = _FakeContext(fake_socket)
+        fake_zmq = _FakeZmq(fake_context)
+        client = ZmqAlignedStreamClient("tcp://127.0.0.1:5555", zmq_module=fake_zmq)
+
+        with patch.object(AlignedStreamClient, "_decode_image", return_value="frame-rs00"):
+            aligned = client.recv_aligned_set(timeout_ms=250)
+
+        self.assertEqual(aligned.set_id, 9)
+        self.assertEqual(aligned.timestamp, 12.5)
+        self.assertEqual(aligned.skew_ms, 1.25)
+        self.assertEqual(aligned.camera_order, ["rs-00"])
+        self.assertEqual(aligned.frames, {"rs-00": "frame-rs00"})
+        self.assertEqual(aligned.device_timestamps_ms, {"rs-00": 1000.0})
+        self.assertEqual(fake_socket.connected, ["tcp://127.0.0.1:5555"])
+        self.assertEqual(fake_socket.timeouts[-1], (fake_zmq.RCVTIMEO, 250))
+
+    def test_zmq_client_wraps_timeout(self) -> None:
+        class _Again(Exception):
+            pass
+
+        class _FakeSocket:
+            def setsockopt_string(self, option, value) -> None:
+                pass
+
+            def setsockopt(self, option, value) -> None:
+                pass
+
+            def connect(self, endpoint: str) -> None:
+                pass
+
+            def recv_multipart(self):
+                raise _Again("timeout")
+
+            def close(self, linger: int = 0) -> None:
+                pass
+
+        class _FakeContext:
+            def __init__(self, socket) -> None:
+                self._socket = socket
+
+            def socket(self, socket_type):
+                return self._socket
+
+        class _FakeContextFactory:
+            def __init__(self, context) -> None:
+                self._context = context
+
+            def instance(self):
+                return self._context
+
+        class _FakeZmq:
+            SUB = 2
+            SUBSCRIBE = 3
+            RCVTIMEO = 4
+            Again = _Again
+
+            def __init__(self, context) -> None:
+                self.Context = _FakeContextFactory(context)
+
+        client = ZmqAlignedStreamClient(
+            "tcp://127.0.0.1:5555",
+            timeout_ms=111,
+            zmq_module=_FakeZmq(_FakeContext(_FakeSocket())),
+        )
+
+        with self.assertRaises(StreamClientError):
+            client.recv_aligned_set()
 
 
 if __name__ == "__main__":

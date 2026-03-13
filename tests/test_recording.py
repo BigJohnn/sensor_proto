@@ -17,6 +17,7 @@ from sensor_proto.recording import (
     build_camera_feature_map,
     resolve_recording_fps,
 )
+from sensor_proto.transport.zmq.encoding import encode_aligned_set_multipart
 
 
 class FakeLeRobotDataset:
@@ -233,6 +234,45 @@ class RecordingTests(unittest.TestCase):
         self.assertEqual(sidecar["timestamps_s"], [0.0])
         self.assertEqual(dataset.saved_task, "collect-observations")
         self.assertTrue(dataset.finalized)
+
+    def test_recording_uses_source_frame_buffers_not_transport_payloads(self) -> None:
+        fake_dataset_module = types.SimpleNamespace(LeRobotDataset=FakeLeRobotDataset)
+        fake_video_utils_module = types.SimpleNamespace(
+            StreamingVideoEncoder=FakeStreamingVideoEncoder,
+            resolve_vcodec=lambda codec: codec,
+        )
+
+        def fake_import_module(name: str):
+            if name == "lerobot.common.datasets.lerobot_dataset":
+                return fake_dataset_module
+            if name == "lerobot.common.datasets.video_utils":
+                return fake_video_utils_module
+            raise ImportError(name)
+
+        def fake_transport_encoder(frame: Frame, jpeg_quality: int) -> bytes:
+            return f"wire:{frame.camera_id}:{jpeg_quality}".encode("utf-8")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = build_run_config(str(Path(tmpdir) / "dataset"))
+            aligned_set = build_aligned_set()
+            transport_parts = encode_aligned_set_multipart(
+                aligned_set,
+                ["rs-00", "rs 00"],
+                jpeg_quality=77,
+                image_encoder=fake_transport_encoder,
+            )
+            with patch("sensor_proto.recording.importlib.import_module", side_effect=fake_import_module):
+                recorder = LeRobotRecorder(config)
+                recorder.record(aligned_set)
+                recorder.close()
+
+        dataset = FakeLeRobotDataset.last_instance
+        assert dataset is not None
+        payload = dataset.frames[0]
+        self.assertEqual(transport_parts[2], b"wire:rs-00:77")
+        self.assertEqual(transport_parts[4], b"wire:rs 00:77")
+        self.assertEqual(payload["observation.images.rs_00"].tolist(), [[[3, 2, 1]]])
+        self.assertEqual(payload["observation.images.rs_00_2"].tolist(), [[[6, 5, 4]]])
 
     def test_recording_sink_writes_frames_on_background_worker(self) -> None:
         backend = FakeRecorderBackend()

@@ -204,6 +204,22 @@ class AlignedSetRepository:
             "first_failure_at_set": None,
             "last_error": None,
         }
+        self._transport: dict[str, Any] = {
+            "enabled": False,
+            "kind": None,
+            "port": None,
+            "topic": None,
+            "active": False,
+            "failed": False,
+            "backpressure_strategy": None,
+            "queue_maxsize": None,
+            "queue_size": 0,
+            "submitted_sets": 0,
+            "published_sets": 0,
+            "dropped_sets": 0,
+            "would_block_events": 0,
+            "last_error": None,
+        }
         self._started_at = time.time()
         self._last_publish_at: float | None = None
         self._published_sets = 0
@@ -277,6 +293,10 @@ class AlignedSetRepository:
         with self._lock:
             self._recording = dict(payload)
 
+    def set_transport_status(self, payload: dict[str, object]) -> None:
+        with self._lock:
+            self._transport = dict(payload)
+
     def stop(self) -> None:
         with self._lock:
             self._running = False
@@ -325,6 +345,7 @@ class AlignedSetRepository:
                     "publish_rate_hz": round(self._compute_publish_rate_hz(now_s), 3),
                 },
                 "recording": dict(self._recording),
+                "transport": dict(self._transport),
                 "sync": self._latest_sync,
             }
 

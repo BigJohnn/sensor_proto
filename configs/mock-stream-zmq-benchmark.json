@@ -1,0 +1,64 @@
+{
+  "duration_s": 0.0,
+  "queue_size": 32,
+  "processing_delay_ms": 0.0,
+  "sync": {
+    "enabled": true,
+    "strategy": "device-clock-soft-sync",
+    "tolerance_ms": 15.0,
+    "max_buffered_frames": 6,
+    "reference_camera_id": "mock-00",
+    "hardware_sync_mode": "disabled"
+  },
+  "stream": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "recent_sets": 4,
+    "client_refresh_ms": 120,
+    "preview_max_width": 1280,
+    "preview_max_height": 720,
+    "preview_jpeg_quality": 72
+  },
+  "transport": {
+    "enabled": true,
+    "kind": "zmq",
+    "bind_host": "127.0.0.1",
+    "port": 5555,
+    "topic": "",
+    "jpeg_quality": 80,
+    "max_queue": 1,
+    "backpressure_strategy": "latest_only_drop_oldest"
+  },
+  "cameras": [
+    {
+      "id": "mock-00",
+      "kind": "mock",
+      "model": "realsense-d435i",
+      "fps": 30,
+      "width": 640,
+      "height": 480,
+      "max_frames": null,
+      "mock_payload_size": 921600,
+      "mock_jitter_ms": 1.5,
+      "mock_timestamp_offset_ms": 0.0,
+      "mock_sync_group": "bench-rig",
+      "capture_image_data": true,
+      "seed": 7
+    },
+    {
+      "id": "mock-01",
+      "kind": "mock",
+      "model": "realsense-d455",
+      "fps": 30,
+      "width": 640,
+      "height": 480,
+      "max_frames": null,
+      "mock_payload_size": 921600,
+      "mock_jitter_ms": 1.5,
+      "mock_timestamp_offset_ms": 4.0,
+      "mock_sync_group": "bench-rig",
+      "capture_image_data": true,
+      "seed": 11
+    }
+  ]
+}

@@ -66,6 +66,18 @@ class RecordingConfig:
 
 
 @dataclass(slots=True)
+class TransportConfig:
+    enabled: bool = False
+    kind: str = "zmq"
+    bind_host: str = "0.0.0.0"
+    port: int = 5555
+    topic: str = ""
+    jpeg_quality: int = 80
+    max_queue: int = 1
+    backpressure_strategy: str = "latest_only_drop_oldest"
+
+
+@dataclass(slots=True)
 class RunConfig:
     cameras: list[CameraConfig]
     duration_s: float
@@ -75,6 +87,7 @@ class RunConfig:
     sync: SyncConfig = field(default_factory=SyncConfig)
     stream: StreamConfig = field(default_factory=StreamConfig)
     recording: RecordingConfig = field(default_factory=RecordingConfig)
+    transport: TransportConfig = field(default_factory=TransportConfig)
 
 
 def load_run_config(path: str | Path) -> RunConfig:
@@ -85,6 +98,7 @@ def load_run_config(path: str | Path) -> RunConfig:
     sync_raw = raw.get("sync", {})
     stream_raw = raw.get("stream", {})
     recording_raw = raw.get("recording", {})
+    transport_raw = raw.get("transport", {})
     return RunConfig(
         cameras=cameras,
         duration_s=float(raw.get("duration_s", 10.0)),
@@ -126,6 +140,16 @@ def load_run_config(path: str | Path) -> RunConfig:
                 if recording_raw.get("encoder_threads") is not None
                 else None
             ),
+        ),
+        transport=TransportConfig(
+            enabled=bool(transport_raw.get("enabled", False)),
+            kind=str(transport_raw.get("kind", "zmq")),
+            bind_host=str(transport_raw.get("bind_host", "0.0.0.0")),
+            port=int(transport_raw.get("port", 5555)),
+            topic=str(transport_raw.get("topic", "")),
+            jpeg_quality=int(transport_raw.get("jpeg_quality", 80)),
+            max_queue=int(transport_raw.get("max_queue", 1)),
+            backpressure_strategy=str(transport_raw.get("backpressure_strategy", "latest_only_drop_oldest")),
         ),
     )
 

@@ -79,6 +79,10 @@ make stream-down
 
 默认会按当前在线相机数自适应启动，不要求必须满 `8` 台。
 
+如果要显式验证 ZMQ data-plane，可直接把运行时模板切到
+[configs/realsense-8cam-zmq-session.json](/home/corenetic/Code/sensor_proto/configs/realsense-8cam-zmq-session.json)；
+这份模板会保留 HTTP control-plane / preview，同时开启 `transport.enabled=true`。
+
 ## Host 侧代码如何拿到同步后的 frames
 
 主入口在 [stream_client.py](/home/corenetic/Code/sensor_proto/src/sensor_proto/stream_client.py)。
@@ -132,6 +136,23 @@ print(aligned.device_timestamps_ms)
 - `camera_order`
 - `raw_payload`
 
+如果启用了 ZMQ data-plane，host 侧还可以使用最小阻塞客户端：
+
+```python
+from sensor_proto.stream_client import ZmqAlignedStreamClient
+
+client = ZmqAlignedStreamClient("tcp://127.0.0.1:5555")
+aligned = client.recv_aligned_set(timeout_ms=1000)
+print(aligned.set_id, aligned.camera_order)
+```
+
+当前决策是：
+
+- `make stream-up` 继续启动单个 `sensor-stream` 进程
+- 该进程同时承载 HTTP control-plane / preview 与 ZMQ data-plane
+- 是否启用 ZMQ 由运行时 `transport.enabled` 控制
+- `/api/latest-set` 和逐帧 BMP endpoint 现阶段只保留 debug fallback，不再作为长期数据面目标
+
 ## Host 侧实时查看
 
 实时 viewer 入口在 [stream_viewer.py](/home/corenetic/Code/sensor_proto/src/sensor_proto/stream_viewer.py)。
@@ -149,6 +170,12 @@ make stream-viewer
 - 顶部显示 `set_id / timestamp / skew_ms / camera_count`
 - 每个子画面显示 `camera_id / offset`
 - 按 `q` 或 `ESC` 退出
+
+viewer 当前的数据面选择规则：
+
+- 默认 `auto`
+- 如果 `/api/health` 广播了启用中的 ZMQ transport，则 viewer 直接消费 ZMQ aligned-set data-plane 并在 host 侧渲染网格
+- 否则回退到现有 HTTP preview mosaic
 
 ## Host 侧用 Rerun 看已录好的 episode
 
@@ -185,6 +212,12 @@ make stream-shot
 
 - [artifacts/latest-aligned-frames](/home/corenetic/Code/sensor_proto/artifacts/latest-aligned-frames)
 
+CLI 当前的数据面选择规则也默认为 `auto`：
+
+- 若健康检查显示 ZMQ data-plane 已启用，则优先从 ZMQ 接收 aligned set
+- 否则回退到 HTTP `/api/latest-set`
+- 也可以显式传 `--transport http|zmq`
+
 ## 运行时产物
 
 推流服务启动后，运行时配置会写到：
@@ -214,8 +247,19 @@ host 侧 viewer 和 Python client 依赖：
 
 - `numpy`
 - `cv2`
+- `pyzmq`（仅在使用 ZMQ data-plane 时需要）
 - `uv`
 - `ffmpeg` 可执行文件，版本需 `>= 5.1`
+
+基准工具入口在 [transport_benchmark.py](/home/corenetic/Code/sensor_proto/src/sensor_proto/transport_benchmark.py)：
+
+```bash
+PYTHONPATH=src python -m sensor_proto.transport_benchmark --base-url http://127.0.0.1:8787 --transport http
+PYTHONPATH=src python -m sensor_proto.transport_benchmark --base-url http://127.0.0.1:8787 --transport zmq
+```
+
+真实双机部署和 LAN benchmark 步骤见
+[docs/dual-machine-zmq-benchmark.md](/home/corenetic/Code/sensor_proto/docs/dual-machine-zmq-benchmark.md)。
 
 如果要用 `make episode-rerun`，host 上需要先有 `ffmpeg >= 5.1`。
 注意：Ubuntu 22.04 系统仓库自带的 `ffmpeg 4.4.x` 不够新，Rerun 仍会拒绝解码。

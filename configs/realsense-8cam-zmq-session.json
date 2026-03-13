@@ -1,0 +1,107 @@
+{
+  "duration_s": 30.0,
+  "queue_size": 320,
+  "processing_delay_ms": 0.0,
+  "report_path": "artifacts/realsense-8cam-report.json",
+  "sync": {
+    "enabled": true,
+    "strategy": "device-clock-soft-sync",
+    "tolerance_ms": 45.0,
+    "max_buffered_frames": 10,
+    "reference_camera_id": "rs-00",
+    "hardware_sync_mode": "disabled"
+  },
+  "stream": {
+    "host": "0.0.0.0",
+    "port": 8787,
+    "recent_sets": 4,
+    "client_refresh_ms": 300,
+    "preview_max_width": 1280,
+    "preview_max_height": 720,
+    "preview_jpeg_quality": 72
+  },
+  "transport": {
+    "enabled": true,
+    "kind": "zmq",
+    "bind_host": "0.0.0.0",
+    "port": 5555,
+    "topic": "",
+    "jpeg_quality": 80,
+    "max_queue": 1,
+    "backpressure_strategy": "latest_only_drop_oldest"
+  },
+  "cameras": [
+    {
+      "id": "rs-00",
+      "kind": "realsense",
+      "model": "realsense-d435i",
+      "serial": "347622071176",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-01",
+      "kind": "realsense",
+      "model": "realsense-d435if",
+      "serial": "327122078969",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-02",
+      "kind": "realsense",
+      "model": "realsense-d435i",
+      "serial": "348522075731",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-03",
+      "kind": "realsense",
+      "model": "realsense-d435",
+      "serial": "152222070161",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-04",
+      "kind": "realsense",
+      "model": "realsense-d435if",
+      "serial": "250222073548",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-05",
+      "kind": "realsense",
+      "model": "realsense-d435i",
+      "serial": "420222073242",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-06",
+      "kind": "realsense",
+      "model": "realsense-d435i",
+      "serial": "406122070707",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "id": "rs-07",
+      "kind": "realsense",
+      "model": "realsense-d435if",
+      "serial": "327122077093",
+      "fps": 30,
+      "width": 640,
+      "height": 480
+    }
+  ]
+}

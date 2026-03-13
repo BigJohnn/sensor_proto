@@ -166,6 +166,14 @@ publisher 规则：
 - 不允许发布 half-old / half-new 的混合相机集合
 - preview 失败不能阻塞 ZMQ aligned-set 发布
 
+v1 当前实现选择的策略：
+
+- `backpressure_strategy = latest_only_drop_oldest`
+- server 侧使用 bounded whole-set queue，默认 `max_queue = 1`
+- 当队列已满时，丢弃最旧的完整 aligned set，再接受最新 aligned set
+- worker 线程异步执行 ZMQ publish，避免同步主链路等待 socket 背压
+- socket send 若触发 would-block，按 whole-set drop 计入丢弃，不做跨消息重组或部分重试
+
 subscriber 规则：
 
 - 每个 multipart message 独立解析

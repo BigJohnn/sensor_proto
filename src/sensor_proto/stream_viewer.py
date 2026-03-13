@@ -4,13 +4,30 @@ import argparse
 import time
 
 from sensor_proto.preview import GridLayout, compute_grid_dimensions, compute_grid_layout
-from sensor_proto.stream_client import AlignedFrameBundle, AlignedStreamClient, StreamClientError
+from sensor_proto.stream_client import (
+    AlignedFrameBundle,
+    AlignedStreamClient,
+    StreamClientError,
+    ZmqAlignedStreamClient,
+    resolve_zmq_endpoint,
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Display the latest aligned multi-camera stream in an OpenCV window.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8787", help="Base URL of the stream service.")
     parser.add_argument("--timeout-s", type=float, default=5.0, help="HTTP timeout in seconds.")
+    parser.add_argument(
+        "--transport",
+        choices=("auto", "http", "zmq"),
+        default="auto",
+        help="Viewer data-plane transport to use.",
+    )
+    parser.add_argument(
+        "--zmq-endpoint",
+        default=None,
+        help="Explicit ZMQ endpoint, e.g. tcp://127.0.0.1:5555. Required for zmq mode if HTTP health is unavailable.",
+    )
     parser.add_argument("--max-width", type=int, default=1600, help="Maximum viewer window width in pixels.")
     parser.add_argument("--max-height", type=int, default=900, help="Maximum viewer window height in pixels.")
     parser.add_argument("--poll-interval-ms", type=int, default=60, help="Delay between fetch attempts in milliseconds.")
@@ -96,6 +113,28 @@ def draw_status_banner(canvas, message: str, color: tuple[int, int, int] = (45, 
     cv2.putText(canvas, message, (16, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (245, 247, 250), 2, cv2.LINE_AA)
 
 
+def resolve_viewer_transport_mode(
+    *,
+    base_url: str,
+    timeout_s: float,
+    transport: str,
+    zmq_endpoint: str | None,
+) -> tuple[str, str | None]:
+    if transport == "http":
+        return "http", None
+    http_client = AlignedStreamClient(base_url, timeout_s=timeout_s)
+    if transport == "zmq":
+        endpoint = zmq_endpoint
+        if endpoint is None:
+            endpoint = resolve_zmq_endpoint(base_url, http_client.get_health())
+        return "zmq", endpoint
+    health = http_client.get_health()
+    transport_payload = health.get("transport", {})
+    if isinstance(transport_payload, dict) and transport_payload.get("enabled") and transport_payload.get("kind") == "zmq":
+        return "zmq", resolve_zmq_endpoint(base_url, health, explicit_endpoint=zmq_endpoint)
+    return "http", None
+
+
 def _load_cv2_module():
     try:
         import cv2
@@ -115,6 +154,17 @@ def _load_numpy_module():
 def main() -> None:
     args = parse_args()
     client = AlignedStreamClient(args.base_url, timeout_s=args.timeout_s)
+    viewer_transport, viewer_zmq_endpoint = resolve_viewer_transport_mode(
+        base_url=args.base_url,
+        timeout_s=args.timeout_s,
+        transport=args.transport,
+        zmq_endpoint=args.zmq_endpoint,
+    )
+    zmq_client = (
+        ZmqAlignedStreamClient(viewer_zmq_endpoint, timeout_ms=max(1, int(args.timeout_s * 1000.0)))
+        if viewer_transport == "zmq" and viewer_zmq_endpoint is not None
+        else None
+    )
     cv2 = _load_cv2_module()
 
     cv2.namedWindow(args.window_name, cv2.WINDOW_NORMAL)
@@ -127,13 +177,25 @@ def main() -> None:
         overlay_message: str | None = None
         overlay_color = (45, 45, 160)
         try:
-            preview = client.get_latest_preview()
-            if preview.set_id != last_set_id:
-                last_canvas = preview.frame
-                frame_height, frame_width = last_canvas.shape[:2]
-                cv2.resizeWindow(args.window_name, min(args.max_width, frame_width), min(args.max_height, frame_height))
-                last_set_id = preview.set_id
-                last_set_change_at = time.monotonic()
+            if zmq_client is not None:
+                aligned = zmq_client.recv_aligned_set(timeout_ms=max(1, args.poll_interval_ms))
+                if aligned.set_id != last_set_id:
+                    last_canvas, layout = render_aligned_grid(aligned, args.max_width, args.max_height)
+                    cv2.resizeWindow(
+                        args.window_name,
+                        min(args.max_width, layout.canvas_width),
+                        min(args.max_height, layout.canvas_height),
+                    )
+                    last_set_id = aligned.set_id
+                    last_set_change_at = time.monotonic()
+            else:
+                preview = client.get_latest_preview()
+                if preview.set_id != last_set_id:
+                    last_canvas = preview.frame
+                    frame_height, frame_width = last_canvas.shape[:2]
+                    cv2.resizeWindow(args.window_name, min(args.max_width, frame_width), min(args.max_height, frame_height))
+                    last_set_id = preview.set_id
+                    last_set_change_at = time.monotonic()
             stalled_for_s = compute_stalled_duration_s(last_set_change_at, time.monotonic(), args.stale_after_ms)
             if stalled_for_s is not None:
                 overlay_message = build_stalled_message(last_set_id, stalled_for_s)
@@ -154,6 +216,8 @@ def main() -> None:
         if key in (27, ord("q")):
             break
 
+    if zmq_client is not None:
+        zmq_client.close()
     cv2.destroyAllWindows()
 
 
