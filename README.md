@@ -261,6 +261,9 @@ PYTHONPATH=src python -m sensor_proto.transport_benchmark --base-url http://127.
 真实双机部署和 LAN benchmark 步骤见
 [docs/dual-machine-zmq-benchmark.md](/home/corenetic/Code/sensor_proto/docs/dual-machine-zmq-benchmark.md)。
 
+当前已经跑过的 mock / 硬件 / 正式镜像验证快照见
+[docs/zmq-transport-validation-snapshot-2026-03-13.md](/home/corenetic/Code/sensor_proto/docs/zmq-transport-validation-snapshot-2026-03-13.md)。
+
 如果要用 `make episode-rerun`，host 上需要先有 `ffmpeg >= 5.1`。
 注意：Ubuntu 22.04 系统仓库自带的 `ffmpeg 4.4.x` 不够新，Rerun 仍会拒绝解码。
 
