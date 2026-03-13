@@ -2,3 +2,4 @@ __pycache__/
 .pytest_cache/
 .venv/
 artifacts/
+src/sensor_proto.egg-info
