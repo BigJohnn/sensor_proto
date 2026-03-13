@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 PYTEST_DISABLE_PLUGIN_AUTOLOAD ?= 1
 
-.PHONY: test mock-run stream-up stream-down stream-logs stream-viewer stream-shot stream-record-10s episode-rerun
+.PHONY: test mock-run stream-up stream-down stream-logs stream-viewer stream-shot stream-record-10s episode-rerun episode-mosaic
 
 test:
 	source $$HOME/.local/bin/env && UV_CACHE_DIR=/tmp/uv-cache PYTEST_DISABLE_PLUGIN_AUTOLOAD=$(PYTEST_DISABLE_PLUGIN_AUTOLOAD) PYTHONPATH=src uv run --no-project --python "$$(command -v python3)" python -m pytest
@@ -31,3 +31,11 @@ stream-record-10s:
 episode-rerun:
 	@if [[ -z "$(EPISODE)" ]]; then echo "Usage: make episode-rerun EPISODE=artifacts/lerobot/<episode_dir>"; exit 1; fi
 	bash scripts/run_episode_rerun.sh "$(EPISODE)"
+
+episode-mosaic:
+	@if [[ -z "$(EPISODE)" ]]; then echo "Usage: make episode-mosaic EPISODE=artifacts/lerobot/<episode_dir> [OUTPUT=/path/to/output.mp4]"; exit 1; fi
+	if [[ -n "$(OUTPUT)" ]]; then \
+		bash scripts/render_episode_mosaic.sh "$(EPISODE)" --output "$(OUTPUT)"; \
+	else \
+		bash scripts/render_episode_mosaic.sh "$(EPISODE)"; \
+	fi

@@ -36,6 +36,7 @@ Use these commands as the stable developer entry points:
 - `make stream-shot` to fetch the latest aligned frame set and save per-camera PNGs
 - `make stream-record-10s` to record one LeRobot v3 episode from the currently connected RealSense cameras, stopping after the default target of 300 aligned frame sets
 - `make episode-rerun EPISODE=artifacts/lerobot/<episode_dir>` to visualize a recorded LeRobot episode on the host using rerun-sdk and a host `ffmpeg` executable
+- `make episode-mosaic EPISODE=artifacts/lerobot/<episode_dir> [OUTPUT=/path/to/output.mp4]` to stitch the recorded per-camera MP4 files into one tiled MP4 on the host with `ffmpeg`
 - `make stream-down` to stop the hardware stream service
 - `make stream-logs` to follow the hardware stream service logs
 - `docker compose -f docker/compose.yaml config` to validate compose config
