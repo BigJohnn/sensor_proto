@@ -7,3 +7,12 @@ src/sensor_proto.egg-info
 sensor_proto.egg-info
 .agents
 .claude
+
+# Hikrobot MVS SDK runtime installer (large binary, install separately)
+hik-sdk/
+
+# MVS SDK runtime logs
+MvSdkLog/
+
+# Windows path artifact created by MVS SDK installer
+$(ALLUSERSPROFILE)/

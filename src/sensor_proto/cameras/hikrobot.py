@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import sys
+import threading
 import time
 from ctypes import POINTER, cast
 from collections.abc import AsyncIterator
@@ -14,6 +15,8 @@ from sensor_proto.models import Frame
 _MVS_PYTHON_PATH = "/opt/MVS/Samples/64/Python"
 # BGR8 packed pixel format (Hikvision GenICam extension: 0x02180015)
 _PIXEL_FORMAT_BGR8 = 0x02180015
+# MVS SDK is not thread-safe for concurrent device open; serialize with this lock
+_MVS_OPEN_LOCK = threading.Lock()
 
 
 def _load_mvs_sdk():
@@ -54,6 +57,8 @@ class HikrobotCameraAdapter(CameraAdapter):
         self._mvs = mvs_module
         self._cam = self._mvs.MvCamera()
         self._started = False
+        self._device_clock_epoch_ns: int = 0
+        self._host_clock_epoch_s: float = 0.0
 
     # ------------------------------------------------------------------
     # Device lifecycle
@@ -72,7 +77,8 @@ class HikrobotCameraAdapter(CameraAdapter):
         if not self.config.serial:
             return 0
         for i in range(device_list.nDeviceNum):
-            usb_info = device_list.pDeviceInfo[i].SpecialInfo.stUsb3VInfo
+            dev_info = cast(device_list.pDeviceInfo[i], POINTER(self._mvs.MV_CC_DEVICE_INFO)).contents
+            usb_info = dev_info.SpecialInfo.stUsb3VInfo
             serial = bytes(usb_info.chSerialNumber).decode("utf-8", errors="ignore").rstrip("\x00")
             if serial == self.config.serial:
                 return i
@@ -95,6 +101,13 @@ class HikrobotCameraAdapter(CameraAdapter):
         self._cam.MV_CC_SetEnumValue("PixelFormat", _PIXEL_FORMAT_BGR8)
         self._cam.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", True)
         self._cam.MV_CC_SetFloatValue("AcquisitionFrameRate", float(self.config.fps))
+        # Calibrate device clock: record device↔host epoch so the FrameSynchronizer
+        # EMA starts near zero rather than converging from an unknown large offset.
+        self._device_clock_epoch_ns, self._host_clock_epoch_s = self._calibrate_device_clock()
+
+    def _open_locked(self) -> None:
+        with _MVS_OPEN_LOCK:
+            self._open()
 
     def _start_grabbing(self) -> None:
         ret = self._cam.MV_CC_StartGrabbing()
@@ -121,11 +134,27 @@ class HikrobotCameraAdapter(CameraAdapter):
         except Exception:
             pass
 
+    def _calibrate_device_clock(self) -> tuple[int, float]:
+        """Latch device timestamp and record the corresponding host monotonic time.
+
+        Returns (device_epoch_ns, host_epoch_s). On failure falls back to (0, 0.0)
+        so the FrameSynchronizer EMA handles alignment without explicit calibration.
+        """
+        try:
+            self._cam.MV_CC_SetCommandValue("TimestampLatch")
+            st = self._mvs.MVCC_INTVALUE_EX()
+            ret = self._cam.MV_CC_GetIntValueEx("Timestamp", st)
+            if ret == 0:
+                return int(st.nCurValue), time.monotonic()
+        except Exception:
+            pass
+        return 0, 0.0
+
     def _restart(self) -> None:
         self._stop_grabbing()
         self._close_device()
         self._cam = self._mvs.MvCamera()
-        self._open()
+        self._open_locked()
         self._start_grabbing()
 
     # ------------------------------------------------------------------
@@ -141,7 +170,13 @@ class HikrobotCameraAdapter(CameraAdapter):
             fi = stOutFrame.stFrameInfo
             payload_size = int(fi.nFrameLen)
             device_ts_ns = (int(fi.nDevTimeStampHigh) << 32) | int(fi.nDevTimeStampLow)
-            device_timestamp_ms = device_ts_ns / 1_000_000.0
+            if self._device_clock_epoch_ns > 0:
+                # Map device ns-since-boot to host monotonic timeline so the
+                # FrameSynchronizer EMA starts from a near-zero residual.
+                elapsed_ns = device_ts_ns - self._device_clock_epoch_ns
+                device_timestamp_ms = self._host_clock_epoch_s * 1000.0 + elapsed_ns / 1_000_000.0
+            else:
+                device_timestamp_ms = device_ts_ns / 1_000_000.0
             frame_counter = int(fi.nFrameNum)
             image_data: bytes | None = None
             if self.config.capture_image_data and payload_size > 0 and stOutFrame.pBufAddr:
@@ -198,7 +233,7 @@ class HikrobotCameraAdapter(CameraAdapter):
     # ------------------------------------------------------------------
 
     async def frames(self) -> AsyncIterator[Frame]:
-        await asyncio.to_thread(self._open)
+        await asyncio.to_thread(self._open_locked)
         await asyncio.to_thread(self._start_grabbing)
         sequence = 0
         consecutive_failures = 0

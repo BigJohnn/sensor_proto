@@ -5,6 +5,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      target: realsense
       args:
         INSTALL_REALSENSE: "0"
         INSTALL_ORBBEC: "0"
@@ -20,6 +21,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      target: realsense
       ssh:
         - default
       args:
@@ -42,6 +44,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      target: realsense
       args:
         INSTALL_REALSENSE: "1"
         INSTALL_ORBBEC: "0"
@@ -62,4 +65,31 @@ services:
         "configs/realsense-8cam-session.json",
         "--generated-config",
         "artifacts/realsense-8cam-stream-runtime.json",
+      ]
+
+  sensor-hikrobot-stream:
+    profiles: ["hikrobot"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: hikrobot
+    working_dir: /workspace
+    privileged: true
+    volumes:
+      - ..:/workspace
+      - /dev/bus/usb:/dev/bus/usb
+      - /run/udev:/run/udev:ro
+      - /opt/MVS:/opt/MVS:ro
+    ports:
+      - "0.0.0.0:8787:8787"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      MVCAM_COMMON_RUNENV: /opt/MVS/lib
+    entrypoint: ["python3", "-m", "sensor_proto.stream_main"]
+    command:
+      [
+        "--config",
+        "configs/hikrobot-stream.json",
+        "--generated-config",
+        "artifacts/hikrobot-stream-runtime.json",
       ]
