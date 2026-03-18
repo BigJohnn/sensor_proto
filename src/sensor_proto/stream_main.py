@@ -351,6 +351,10 @@ def build_hikrobot_stream_config_payload(
         }
         if first_camera.get("max_frames") is not None:
             generated_camera["max_frames"] = int(first_camera["max_frames"])
+        if first_camera.get("exposure_us") is not None:
+            generated_camera["exposure_us"] = float(first_camera["exposure_us"])
+        if first_camera.get("gain_db") is not None:
+            generated_camera["gain_db"] = float(first_camera["gain_db"])
         generated_cameras.append(generated_camera)
 
     generated_payload = dict(template_payload)

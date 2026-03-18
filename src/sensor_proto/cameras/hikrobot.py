@@ -101,6 +101,20 @@ class HikrobotCameraAdapter(CameraAdapter):
         self._cam.MV_CC_SetEnumValue("PixelFormat", _PIXEL_FORMAT_BGR8)
         self._cam.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", True)
         self._cam.MV_CC_SetFloatValue("AcquisitionFrameRate", float(self.config.fps))
+        # Exposure: manual if exposure_us set, otherwise continuous auto
+        if self.config.exposure_us is not None:
+            self._cam.MV_CC_SetEnumValue("ExposureAuto", 0)
+            self._cam.MV_CC_SetFloatValue("ExposureTime", float(self.config.exposure_us))
+        else:
+            self._cam.MV_CC_SetEnumValue("ExposureAuto", 2)
+        # Gain: manual if gain_db set, otherwise continuous auto
+        if self.config.gain_db is not None:
+            self._cam.MV_CC_SetEnumValue("GainAuto", 0)
+            self._cam.MV_CC_SetFloatValue("Gain", float(self.config.gain_db))
+        else:
+            self._cam.MV_CC_SetEnumValue("GainAuto", 2)
+        # White balance: continuous auto
+        self._cam.MV_CC_SetEnumValue("BalanceWhiteAuto", 2)
         # Calibrate device clock: record device↔host epoch so the FrameSynchronizer
         # EMA starts near zero rather than converging from an unknown large offset.
         self._device_clock_epoch_ns, self._host_clock_epoch_s = self._calibrate_device_clock()
@@ -170,6 +184,10 @@ class HikrobotCameraAdapter(CameraAdapter):
             fi = stOutFrame.stFrameInfo
             payload_size = int(fi.nFrameLen)
             device_ts_ns = (int(fi.nDevTimeStampHigh) << 32) | int(fi.nDevTimeStampLow)
+            if self._device_clock_epoch_ns == 0 and device_ts_ns > 0:
+                # TimestampLatch not supported on this camera — calibrate from first frame.
+                self._device_clock_epoch_ns = device_ts_ns
+                self._host_clock_epoch_s = time.monotonic()
             if self._device_clock_epoch_ns > 0:
                 # Map device ns-since-boot to host monotonic timeline so the
                 # FrameSynchronizer EMA starts from a near-zero residual.

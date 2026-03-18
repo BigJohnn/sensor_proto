@@ -31,14 +31,16 @@
   },
   "cameras": [
     {
-      "id": "hik-00",
+      "id": "hik-template",
       "kind": "hikrobot",
       "model": "mv-cs016-10uc",
       "serial": "",
       "fps": 30,
       "width": 1440,
       "height": 1080,
-      "capture_image_data": true
+      "capture_image_data": true,
+      "exposure_us": 29565,
+      "gain_db": 16.98
     }
   ]
 }

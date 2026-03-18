@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 PYTEST_DISABLE_PLUGIN_AUTOLOAD ?= 1
 
-.PHONY: test mock-run stream-up stream-down stream-logs stream-viewer stream-shot stream-record-10s episode-rerun episode-mosaic hikrobot-stream-up hikrobot-stream-down hikrobot-stream-logs hikrobot-stream-shot hikrobot-stream-viewer
+.PHONY: test mock-run stream-up stream-down stream-logs stream-viewer stream-shot stream-record-10s episode-rerun episode-mosaic hikrobot-stream-up hikrobot-stream-down hikrobot-stream-logs hikrobot-stream-shot hikrobot-stream-viewer hikrobot-stream-record-10s
 
 test:
 	source $$HOME/.local/bin/env && UV_CACHE_DIR=/tmp/uv-cache PYTEST_DISABLE_PLUGIN_AUTOLOAD=$(PYTEST_DISABLE_PLUGIN_AUTOLOAD) PYTHONPATH=src uv run --no-project --python "$$(command -v python3)" python -m pytest
@@ -24,6 +24,9 @@ hikrobot-stream-shot:
 
 hikrobot-stream-viewer:
 	bash scripts/run_stream_viewer.sh
+
+hikrobot-stream-record-10s:
+	bash scripts/record_hikrobot_stream_episode.sh 10
 
 stream-up:
 	bash scripts/run_stream_service.sh

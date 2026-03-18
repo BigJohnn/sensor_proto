@@ -25,6 +25,8 @@ class CameraConfig:
     mock_sync_group: str | None = None
     capture_image_data: bool = False
     seed: int = 0
+    exposure_us: float | None = None
+    gain_db: float | None = None
 
 
 @dataclass(slots=True)
