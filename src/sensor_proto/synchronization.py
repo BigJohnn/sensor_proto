@@ -47,6 +47,16 @@ class FrameSynchronizer:
         self._trim_buffers()
         return self._match_frames()
 
+    def reset(self) -> None:
+        """Clear per-camera clock calibration and pending buffers.
+
+        Called before restarting camera adapters so the first frame of the new
+        session re-anchors the device clock and stale frames don't pollute matching.
+        """
+        self._clock_trackers.clear()
+        for buffer in self._pending.values():
+            buffer.clear()
+
     def finalize(self) -> SyncMetrics:
         if self.metrics.enabled:
             self.metrics.pending_frames = sum(len(buffer) for buffer in self._pending.values())

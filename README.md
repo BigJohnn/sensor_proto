@@ -1,10 +1,10 @@
 # sensor_proto
 
-RealSense 多相机同步采集、推流与 host 侧可视化工具集。
+多相机同步采集、推流与 host 侧可视化工具集，支持 RealSense 与 Hikrobot USB3 Vision 相机。
 
 当前这套流程已经收敛为：
 
-- 容器内自动探测当前在线 RealSense
+- 容器内自动探测当前在线相机（RealSense / Hikrobot）
 - 自动生成运行时配置
 - 对齐多路时间戳后推流到 host
 - host 侧可用 OpenCV 实时查看
@@ -396,6 +396,59 @@ UV_CACHE_DIR=/tmp/uv-cache PYTHONPATH=src uv run --no-project --python "$(comman
 - 一次进程生命周期默认保存为一个 episode
 - 使用 `Ctrl-C` 退出时会执行 `save_episode()` 和 `finalize()`
 - 默认输出目录由配置里的 `recording.root_dir` 控制，例如 `artifacts/lerobot/mock-session`
+
+## Hikrobot 排障
+
+### 常用命令
+
+```bash
+make hikrobot-stream-up       # 启动流服务
+make hikrobot-stream-logs     # 查看容器日志
+make hikrobot-stream-shot     # 抓取最新同步帧
+make hikrobot-stream-down     # 停止流服务
+make hikrobot-stream-record-10s  # 录制 10s LeRobot v3 episode
+```
+
+### 检查相机 USB 速度
+
+两台相机都应连在 USB 3.x 口（5000Mbps），否则带宽不够：
+
+```bash
+for dev in $(find /sys/bus/usb/devices -maxdepth 1 -name "[0-9]*" -not -name "*:*" 2>/dev/null); do
+  vendor=$(cat "$dev/idVendor" 2>/dev/null)
+  if [[ "$vendor" == "2bdf" ]]; then
+    serial=$(cat "$dev/serial" 2>/dev/null)
+    speed=$(cat "$dev/speed" 2>/dev/null)
+    busnum=$(cat "$dev/busnum" 2>/dev/null)
+    devpath=$(cat "$dev/devpath" 2>/dev/null)
+    echo "Serial=$serial  Bus=$busnum  Path=$devpath  Speed=${speed}Mbps"
+  fi
+done
+```
+
+期望输出（两台均为 5000Mbps，且在同一 Bus）：
+
+```
+Serial=DA5404760  Bus=2  Path=2.4  Speed=5000Mbps
+Serial=DA5404769  Bus=2  Path=2.3  Speed=5000Mbps
+```
+
+若某台显示 480Mbps，则该相机插在 USB 2.0 口，需换插 USB 3.0 蓝色口。
+
+### 判断流是否正常
+
+1. `make hikrobot-stream-logs` — 确认无 `OpenDevice failed` 错误
+2. `curl -s http://localhost:8787/api/health | python3 -m json.tool` — 查看 `published_sets` 是否在增长
+3. `make hikrobot-stream-shot` — 抓帧，确认两台相机都有图像
+
+### 常见问题
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| `OpenDevice failed: 0x80000301` | 两相机并发打开，MVS SDK 不线程安全 | 已修复（全局锁序列化打开） |
+| 流 stall，无 aligned sets | 两相机时钟漂移超出 45ms 同步窗口 | 已修复（15s watchdog 自动重启相机会话） |
+| 视频快进 | `exposure_us` 超过帧周期（30fps 最大 ~33000µs） | 检查 `configs/hikrobot-stream.json` 中 `exposure_us` |
+| 某相机 480Mbps | 接在 USB 2.0 口，带宽不足 | 换插 USB 3.0 口 |
 
 ## 进一步文档
 
